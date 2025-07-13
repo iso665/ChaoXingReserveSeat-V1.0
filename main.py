@@ -132,10 +132,10 @@ def main(users, action=False):
         logging.info("严格等待到北京时间21:30:00...")
         wait_until("21:30:00", action)
         logging.info("北京时间21:30:00 - 开始预约流程")
-    attempt_times = 0
-    usernames, passwords = None, None
-    if action:
-        usernames, passwords = get_user_credentials(action)
+        attempt_times = 0
+        usernames, passwords = None, None
+        if action:
+            usernames, passwords = get_user_credentials(action)
         
     total_tasks = sum(len(user["tasks"]) for user in users)
     success_list = None
