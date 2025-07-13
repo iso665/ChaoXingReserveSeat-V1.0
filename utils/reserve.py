@@ -6,40 +6,32 @@ import time
 import logging
 import datetime
 import pytz
+import random
+import numpy as np
+import cv2
 from urllib3.exceptions import InsecureRequestWarning
+
+# 禁用不安全的请求警告
+requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
 
 class reserve:
     def __init__(self, sleep_time=0.2, max_attempt=50, enable_slider=False, reserve_next_day=False):
         self.login_page = "https://passport2.chaoxing.com/mlogin?loginType=1&newversion=true&fid="
         self.url = "https://office.chaoxing.com/front/third/apps/seat/code?id={}&seatNum={}"
         self.submit_url = "https://office.chaoxing.com/data/apps/seat/submit"
-        self.seat_url = "https://office.chaoxing.com/data/apps/seat/getusedtimes"
         self.login_url = "https://passport2.chaoxing.com/fanyalogin"
         self.token = ""
-        self.success_times = 0
-        self.fail_dict = []
-        self.submit_msg = []
         self.requests = requests.session()
         self.token_pattern = re.compile("token = '(.*?)'")
+        
+        # 请求头设置
         self.headers = {
             "Referer": "https://office.chaoxing.com/",
             "Host": "captcha.chaoxing.com",
-            "Pragma": 'no-cache',
-            "Sec-Ch-Ua": '"Google Chrome";v="125", "Chromium";v="125", "Not.A/Brand";v="24"',
-            'Sec-Ch-Ua-Mobile': '?0',
-            'Sec-Ch-Ua-Platform': '"Linux"',
-            'Sec-Fetch-Dest': 'document',
-            'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'none',
-            'Sec-Fetch-User': '?1',
-            'Upgrade-Insecure-Requests': '1',
-            'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
         }
         self.login_headers = {
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3",
-            "Accept-Language": "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7",
-            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 10_3_1 like Mac OS X) AppleWebKit/603.1.3 (KHTML, like Gecko) Version/10.0 Mobile/14E304 Safari/602.1 wechatdevtools/1.05.2109131 MicroMessenger/8.0.5 Language/zh_CN webview/16364215743155638",
-            "X-Requested-With": "XMLHttpRequest",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
             "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
             "Host": "passport2.chaoxing.com"
         }
@@ -49,185 +41,283 @@ class reserve:
         self.enable_slider = enable_slider
         self.reserve_next_day = reserve_next_day
         self.beijing_tz = pytz.timezone('Asia/Shanghai')
-        requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
+        self.requests.headers.update(self.login_headers)
 
     def get_target_date(self):
         """获取正确的目标预约日期（北京时间）"""
-        # 获取当前北京时间
         now = datetime.datetime.now(self.beijing_tz)
         
         # 根据reserve_next_day计算目标日期
         if self.reserve_next_day:
-            # 预约明天
             target_date = now + datetime.timedelta(days=1)
         else:
-            # 预约今天
             target_date = now
-        
-        # 检查是否是有效预约日
-        if target_date.hour >= 22:  # 晚上10点后不能预约当天
-            logging.warning("当前时间过晚，自动改为预约明天")
-            target_date = target_date + datetime.timedelta(days=1)
         
         return target_date.strftime("%Y-%m-%d")
     
-    # login and page token
     def _get_page_token(self, url):
-        response = self.requests.get(url=url, verify=False)
-        html = response.content.decode('utf-8')
-        token = re.findall(
-            'token: \'(.*?)\'', html)[0] if len(re.findall('token: \'(.*?)\'', html)) > 0 else ""
-        return token
+        """获取页面token，带错误处理和超时"""
+        try:
+            response = self.requests.get(url=url, verify=False, timeout=10)
+            if response.status_code != 200:
+                logging.error(f"获取token失败，状态码: {response.status_code}")
+                return ""
+                
+            html = response.content.decode('utf-8')
+            token_match = self.token_pattern.search(html)
+            return token_match.group(1) if token_match else ""
+        except Exception as e:
+            logging.error(f"获取token异常: {str(e)}")
+            return ""
 
     def get_login_status(self):
-        self.requests.headers = self.login_headers
-        self.requests.get(url=self.login_page, verify=False)
+        """获取登录状态"""
+        try:
+            response = self.requests.get(url=self.login_page, verify=False, timeout=10)
+            return response.status_code == 200
+        except Exception as e:
+            logging.error(f"获取登录状态异常: {str(e)}")
+            return False
 
     def login(self, username, password):
-        username = AES_Encrypt(username)
-        password = AES_Encrypt(password)
-        parm = {
-            "fid": -1,
-            "uname": username,
-            "password": password,
-            "refer": "http%3A%2F%2Foffice.chaoxing.com%2Ffront%2Fthird%2Fapps%2Fseat%2Fcode%3Fid%3D4219%26seatNum%3D380",
-            "t": True
-        }
-        jsons = self.requests.post(
-            url=self.login_url, params=parm, verify=False)
-        obj = jsons.json()
-        if obj['status']:
-            logging.info(f"User {username} login successfully")
-            return (True, '')
-        else:
-            logging.info(f"User {username} login failed. Please check you password and username! ")
-            return (False, obj['msg2'])
+        """用户登录"""
+        try:
+            username_enc = AES_Encrypt(username)
+            password_enc = AES_Encrypt(password)
+            parm = {
+                "fid": -1,
+                "uname": username_enc,
+                "password": password_enc,
+                "refer": "http%3A%2F%2Foffice.chaoxing.com%2F",
+                "t": True
+            }
+            response = self.requests.post(
+                url=self.login_url, params=parm, verify=False, timeout=10)
+            
+            if response.status_code != 200:
+                logging.error(f"登录请求失败，状态码: {response.status_code}")
+                return (False, "登录请求失败")
+                
+            obj = response.json()
+            if obj.get('status', False):
+                return (True, '')
+            else:
+                msg = obj.get('msg2', '未知错误')
+                return (False, msg)
+        except Exception as e:
+            logging.error(f"登录异常: {str(e)}")
+            return (False, str(e))
 
-    # extra: get roomid
     def roomid(self, encode):
-        url = f"https://office.chaoxing.com/data/apps/seat/room/list?cpage=1&pageSize=100&firstLevelName=&secondLevelName=&thirdLevelName=&deptIdEnc={encode}"
-        json_data = self.requests.get(url=url).content.decode('utf-8')
-        ori_data = json.loads(json_data)
-        for i in ori_data["data"]["seatRoomList"]:
-            info = f'{i["firstLevelName"]}-{i["secondLevelName"]}-{i["thirdLevelName"]} id为：{i["id"]}'
-            print(info)
-
-    # solve captcha 
+        """获取图书馆房间ID"""
+        try:
+            url = f"https://office.chaoxing.com/data/apps/seat/room/list?cpage=1&pageSize=100&firstLevelName=&secondLevelName=&thirdLevelName=&deptIdEnc={encode}"
+            response = self.requests.get(url=url, timeout=10)
+            if response.status_code != 200:
+                logging.error(f"获取roomid失败，状态码: {response.status_code}")
+                return
+                
+            data = response.json()
+            for i in data.get("data", {}).get("seatRoomList", []):
+                info = f'{i.get("firstLevelName", "")}-{i.get("secondLevelName", "")}-{i.get("thirdLevelName", "")} id: {i.get("id", "")}'
+                print(info)
+        except Exception as e:
+            logging.error(f"获取roomid异常: {str(e)}")
 
     def resolve_captcha(self):
-        logging.info(f"Start to resolve captcha token")
-        captcha_token, bg, tp = self.get_slide_captcha_data()
-        logging.info(f"Successfully get prepared captcha_token {captcha_token}")
-        logging.info(f"Captcha Image URL-small {tp}, URL-big {bg}")
-        x = self.x_distance(bg, tp)
-        logging.info(f"Successfully calculate the captcha distance {x}")
-
-        params = {
-            "callback": "jQuery33109180509737430778_1716381333117",
-            "captchaId": "42sxgHoTPTKbt0uZxPJ7ssOvtXr3ZgZ1",
-            "type": "slide",
-            "token": captcha_token,
-            "textClickArr": json.dumps([{"x": x}]),
-            "coordinate": json.dumps([]),
-            "runEnv": "10",
-            "version": "1.1.18",
-            "_": int(time.time() * 1000)
-        }
-        response = self.requests.get(
-            f'https://captcha.chaoxing.com/captcha/check/verification/result', params=params, headers=self.headers)
-        text = response.text.replace('jQuery33109180509737430778_1716381333117(', "").replace(')', "")
-        data = json.loads(text)
-        logging.info(f"Successfully resolve the captcha token {data}")
-        try: 
-           validate_val = json.loads(data["extraData"])['validate']
-           return validate_val
-        except KeyError as e:
-            logging.info("Can't load validate value. Maybe server return mistake.")
+        """解决滑块验证码"""
+        try:
+            captcha_token, bg, tp = self.get_slide_captcha_data()
+            if not captcha_token or not bg or not tp:
+                logging.error("获取验证码数据失败")
+                return ""
+                
+            x = self.calculate_slide_distance(bg, tp)
+            if x is None:
+                logging.error("计算滑块距离失败")
+                return ""
+                
+            # 生成随机callback函数名
+            callback_name = f"jQuery{random.randint(100000000000, 999999999999)}_{int(time.time()*1000)}"
+            
+            params = {
+                "callback": callback_name,
+                "captchaId": "42sxgHoTPTKbt0uZxPJ7ssOvtXr3ZgZ1",
+                "type": "slide",
+                "token": captcha_token,
+                "textClickArr": json.dumps([{"x": x}]),
+                "coordinate": json.dumps([]),
+                "runEnv": "10",
+                "version": "1.1.18",
+                "_": int(time.time() * 1000)
+            }
+            
+            response = self.requests.get(
+                'https://captcha.chaoxing.com/captcha/check/verification/result', 
+                params=params, 
+                headers=self.headers,
+                timeout=15
+            )
+            
+            # 处理JSONP响应
+            response_text = response.text
+            if not response_text.startswith(callback_name):
+                logging.error(f"验证码响应格式错误: {response_text[:100]}")
+                return ""
+                
+            json_str = response_text.replace(callback_name, "", 1).strip("();")
+            
+            try:
+                data = json.loads(json_str)
+            except json.JSONDecodeError:
+                logging.error(f"验证码响应JSON解析失败: {json_str[:200]}")
+                return ""
+                
+            if data.get("success", False):
+                extra_data = data.get("extraData", "")
+                try:
+                    extra_json = json.loads(extra_data)
+                    return extra_json.get('validate', "")
+                except Exception:
+                    logging.error(f"extraData解析失败: {extra_data}")
+                    return ""
+            else:
+                logging.error(f"验证码处理失败: {data.get('message', '未知错误')}")
+                return ""
+        except Exception as e:
+            logging.error(f"验证码处理异常: {str(e)}")
             return ""
 
     def get_slide_captcha_data(self):
-        url = "https://captcha.chaoxing.com/captcha/get/verification/image"
-        timestamp = int(time.time() * 1000)
-        capture_key, token = generate_captcha_key(timestamp)
-        referer = f"https://office.chaoxing.com/front/third/apps/seat/code?id=3993&seatNum=0199"
-        params = {
-            "callback": f"jQuery33107685004390294206_1716461324846",
-            "captchaId": "42sxgHoTPTKbt0uZxPJ7ssOvtXr3ZgZ1",
-            "type": "slide",
-            "version": "1.1.18",
-            "captchaKey": capture_key,
-            "token": token,
-            "referer": referer,
-            "_": timestamp,
-            "d": "a",
-            "b": "a"
-        }
-        response = self.requests.get(url=url, params=params, headers=self.headers)
-        content = response.text
-        
-        data = content.replace("jQuery33107685004390294206_1716461324846(",
-                            ")").replace(")", "")
-        data = json.loads(data)
-        captcha_token = data["token"]
-        bg = data["imageVerificationVo"]["shadeImage"]
-        tp = data["imageVerificationVo"]["cutoutImage"]
-        return captcha_token, bg, tp
+        """获取滑块验证码数据"""
+        try:
+            url = "https://captcha.chaoxing.com/captcha/get/verification/image"
+            timestamp = int(time.time() * 1000)
+            captcha_key, token = generate_captcha_key(timestamp)
+            
+            # 生成随机callback函数名
+            callback_name = f"jQuery{random.randint(100000000000, 999999999999)}_{timestamp}"
+            
+            params = {
+                "callback": callback_name,
+                "captchaId": "42sxgHoTPTKbt0uZxPJ7ssOvtXr3ZgZ1",
+                "type": "slide",
+                "version": "1.1.18",
+                "captchaKey": captcha_key,
+                "token": token,
+                "referer": "https://office.chaoxing.com/",
+                "_": timestamp,
+                "d": "a",
+                "b": "a"
+            }
+            
+            response = self.requests.get(url=url, params=params, headers=self.headers, timeout=15)
+            if response.status_code != 200:
+                logging.error(f"获取验证码数据失败，状态码: {response.status_code}")
+                return "", "", ""
+                
+            content = response.text
+            
+            # 处理JSONP响应
+            if not content.startswith(callback_name):
+                logging.error(f"验证码数据响应格式错误: {content[:100]}")
+                return "", "", ""
+                
+            json_str = content.replace(callback_name, "", 1).strip("();")
+            
+            try:
+                data = json.loads(json_str)
+            except json.JSONDecodeError:
+                logging.error(f"验证码数据JSON解析失败: {json_str[:200]}")
+                return "", "", ""
+                
+            captcha_token = data.get("token", "")
+            image_data = data.get("imageVerificationVo", {})
+            bg = image_data.get("shadeImage", "")
+            tp = image_data.get("cutoutImage", "")
+            
+            return captcha_token, bg, tp
+        except Exception as e:
+            logging.error(f"获取验证码数据异常: {str(e)}")
+            return "", "", ""
     
-    def x_distance(self, bg, tp):
-        import numpy as np
-        import cv2
-        def cut_slide(slide):
-            slider_array = np.frombuffer(slide, np.uint8)
-            slider_image = cv2.imdecode(slider_array, cv2.IMREAD_UNCHANGED)
-            slider_part = slider_image[:, :, :3]
-            mask = slider_image[:, :, 3]
-            mask[mask != 0] = 255
-            x, y, w, h = cv2.boundingRect(mask)
-            cropped_image = slider_part[y:y + h, x:x + w]
-            return cropped_image
-        c_captcha_headers = {
-            "Referer": "https://office.chaoxing.com/",
-            "Host": "captcha-b.chaoxing.com",
-            "Pragma" : 'no-cache',
-            "Sec-Ch-Ua": '"Google Chrome";v="125", "Chromium";v="125", "Not.A/Brand";v="24"',
-            'Sec-Ch-Ua-Mobile':'?0',
-            'Sec-Ch-Ua-Platform':'"Linux"',
-            'Sec-Fetch-Dest':'document',
-            'Sec-Fetch-Mode':'navigate',
-            'Sec-Fetch-Site':'none',
-            'Sec-Fetch-User':'?1',
-            'Upgrade-Insecure-Requests':'1',
-            'User-Agent':'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
-        }
-        bgc, tpc = self.requests.get(bg, headers=c_captcha_headers), self.requests.get(tp, headers=c_captcha_headers)
-        bg, tp = bgc.content, tpc.content 
-        bg_img = cv2.imdecode(np.frombuffer(bg, np.uint8), cv2.IMREAD_COLOR)  
-        tp_img = cut_slide(tp)
-        bg_edge = cv2.Canny(bg_img, 100, 200)
-        tp_edge = cv2.Canny(tp_img, 100, 200)
-        bg_pic = cv2.cvtColor(bg_edge, cv2.COLOR_GRAY2RGB)
-        tp_pic = cv2.cvtColor(tp_edge, cv2.COLOR_GRAY2RGB)
-        res = cv2.matchTemplate(bg_pic, tp_pic, cv2.TM_CCOEFF_NORMED)
-        _, _, _, max_loc = cv2.minMaxLoc(res)  
-        tl = max_loc
-        return tl[0]
+    def calculate_slide_distance(self, bg_url, tp_url):
+        """计算滑块需要移动的距离"""
+        try:
+            # 下载背景图
+            bg_response = self.requests.get(bg_url, timeout=15)
+            if bg_response.status_code != 200:
+                logging.error(f"下载背景图失败，状态码: {bg_response.status_code}")
+                return None
+            bg_img = cv2.imdecode(np.frombuffer(bg_response.content, np.uint8), cv2.IMREAD_COLOR)
+            
+            # 下载滑块图
+            tp_response = self.requests.get(tp_url, timeout=15)
+            if tp_response.status_code != 200:
+                logging.error(f"下载滑块图失败，状态码: {tp_response.status_code}")
+                return None
+            tp_img = cv2.imdecode(np.frombuffer(tp_response.content, np.uint8), cv2.IMREAD_UNCHANGED)
+            
+            # 提取滑块
+            if tp_img.shape[2] == 4:  # 带alpha通道
+                mask = tp_img[:, :, 3]
+                mask = cv2.threshold(mask, 1, 255, cv2.THRESH_BINARY)[1]
+                x, y, w, h = cv2.boundingRect(mask)
+                tp_img = tp_img[y:y+h, x:x+w, :3]
+            
+            # 边缘检测
+            bg_edge = cv2.Canny(bg_img, 100, 200)
+            tp_edge = cv2.Canny(tp_img, 100, 200)
+            
+            # 模板匹配
+            result = cv2.matchTemplate(bg_edge, tp_edge, cv2.TM_CCOEFF_NORMED)
+            _, max_val, _, max_loc = cv2.minMaxLoc(result)
+            
+            if max_val < 0.4:  # 匹配阈值
+                logging.warning(f"模板匹配可信度低: {max_val}")
+                
+            return max_loc[0]
+        except ImportError:
+            logging.error("缺少OpenCV依赖，请安装opencv-python")
+            return None
+        except Exception as e:
+            logging.error(f"计算滑块距离异常: {str(e)}")
+            return None
 
     def submit(self, times, roomid, seatid, action):
-        # 获取正确的目标日期
+        """提交预约请求"""
+        if not isinstance(seatid, list):
+            seatid = [seatid]  # 确保seatid是列表
+        
         day_str = self.get_target_date()
-        logging.info(f"预约日期: {day_str}")
+        logging.info(f"预约日期: {day_str}, 时段: {times[0]}-{times[1]}")
+        
+        results = []  # 存储每个座位的预约结果
         
         for seat in seatid:
+            logging.info(f"尝试预约座位: {seat}")
             suc = False
             attempt_count = 0
             
             while not suc and attempt_count < self.max_attempt:
+                attempt_count += 1
+                logging.info(f"座位 {seat} 尝试 #{attempt_count}/{self.max_attempt}")
+                
+                # 获取token
                 token = self._get_page_token(self.url.format(roomid, seat))
-                logging.info(f"Get token: {token}")
+                if not token:
+                    logging.warning("获取token失败，稍后重试")
+                    time.sleep(self.sleep_time)
+                    continue
                 
-                captcha = self.resolve_captcha() if self.enable_slider else ""
-                logging.info(f"Captcha token {captcha}")
+                # 处理验证码
+                captcha = ""
+                if self.enable_slider:
+                    captcha = self.resolve_captcha()
+                    if not captcha:
+                        logging.warning("验证码获取失败，使用空值继续尝试")
                 
+                # 准备请求参数
                 parm = {
                     "roomId": roomid,
                     "startTime": times[0],
@@ -237,32 +327,56 @@ class reserve:
                     "captcha": captcha,
                     "token": token
                 }
-                logging.info(f"submit parameter {parm} ")
+                
+                # 生成加密签名
                 parm["enc"] = enc(parm)
                 
                 try:
-                    html = self.requests.post(
-                        url=self.submit_url, params=parm, verify=True).content.decode('utf-8')
-                    result = json.loads(html)
-                    logging.info(result)
+                    response = self.requests.post(
+                        url=self.submit_url, 
+                        params=parm, 
+                        verify=True,
+                        timeout=15
+                    )
+                    
+                    if response.status_code != 200:
+                        logging.warning(f"预约请求失败，状态码: {response.status_code}")
+                        time.sleep(self.sleep_time)
+                        continue
+                    
+                    try:
+                        result = response.json()
+                    except json.JSONDecodeError:
+                        logging.error(f"响应JSON解析失败: {response.text[:200]}")
+                        time.sleep(self.sleep_time)
+                        continue
                     
                     if result.get("success", False):
-                        logging.info(f"预约成功! 座位: {seat}")
+                        logging.info(f"座位 {seat} 预约成功!")
                         suc = True
+                        results.append(True)
                         break
                     else:
                         msg = result.get("msg", "未知错误")
                         logging.warning(f"预约失败: {msg}")
                         
-                        # 如果是时段未开放错误，停止重试
+                        # 特定错误处理
                         if "未在系统中开放" in msg:
                             logging.error("时段未开放，停止尝试")
-                            return False
+                            results.append(False)
+                            break
+                            
+                        if "当前人数过多" in msg:
+                            logging.warning("系统繁忙，稍后重试")
+                            time.sleep(0.5)  # 稍长等待
                 except Exception as e:
-                    logging.error(f"请求失败: {str(e)}")
+                    logging.error(f"请求异常: {str(e)}")
                 
                 time.sleep(self.sleep_time)
-                attempt_count += 1
-                logging.info(f"尝试次数: {attempt_count}/{self.max_attempt}")
+            
+            if not suc:
+                logging.warning(f"座位 {seat} 预约失败，已达最大尝试次数")
+                results.append(False)
         
-        return suc
+        # 只要有一个座位预约成功就返回True
+        return any(results)
