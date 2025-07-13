@@ -1,6 +1,6 @@
 import os 
 from .encrypt import AES_Encrypt, generate_captcha_key, enc
-from .reserve import reserve  # 确保导入修复后的reserve类
+from .reserve import reserve
 
 def _fetch_env_variables(env_name, action):
     try:
