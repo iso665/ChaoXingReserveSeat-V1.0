@@ -300,6 +300,7 @@ class reserve:
     def get_slide_captcha_data(self):
         """获取滑块验证码数据"""
         try:
+            # 修改URL使用HTTPS
             url = "https://captcha.chaoxing.com/captcha/get/verification/image"
             timestamp = int(time.time() * 1000)
             captcha_key, token = generate_captcha_key(timestamp)
