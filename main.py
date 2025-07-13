@@ -172,10 +172,8 @@ def process_user_tasks(session, user, current_dayofweek, success_list, start_ind
                 is_success=success_list[global_index]
             ))
         
-        # 收集结果
-        for future in as_completed(futures):
-            result = future.result()
-            task_results.append(result)
+        # 收集结果 - 确保按原始顺序收集
+        task_results = [future.result() for future in futures]
     
     return task_results
 
@@ -207,6 +205,10 @@ def reserve_all_tasks(session_cache, users, current_dayofweek, success_list):
             
             if not session_info:
                 logging.warning(f"用户 {username} 无有效会话，跳过")
+                # 标记该用户的所有任务为失败
+                start_index = start_indices[idx]
+                for i in range(len(user["tasks"])):
+                    success_list[start_index + i] = False
                 continue
                 
             session = session_info["session"]
@@ -232,30 +234,6 @@ def reserve_all_tasks(session_cache, users, current_dayofweek, success_list):
     
     return new_success_list
 
-def wait_until(target_time):
-    """精确等待到目标时间（北京时间）"""
-    logging.info(f"等待目标时间: {target_time}")
-    target_h, target_m, target_s = map(int, target_time.split(':'))
-    
-    tz = pytz.timezone('Asia/Shanghai')
-    
-    while True:
-        now = datetime.datetime.now(tz)
-        current_ts = now.hour * 3600 + now.minute * 60 + now.second
-        
-        target_ts = target_h * 3600 + target_m * 60 + target_s
-        
-        if current_ts >= target_ts:
-            logging.info(f"达到目标时间: {now.strftime('%H:%M:%S')}")
-            break
-            
-        # 精确等待
-        time_diff = target_ts - current_ts
-        if time_diff > 1:
-            time.sleep(0.5)
-        else:
-            time.sleep(0.1)
-
 def main(users, action=False):
     logging.info("程序启动")
     
@@ -263,7 +241,7 @@ def main(users, action=False):
         logging.info("GitHub Actions 模式 - 启用精确时间控制")
         
         # 第一步：等待到登录时间
-        login_time = "21:29:30"
+        login_time = "14:53:30"
         logging.info(f"等待到登录时间: {login_time}")
         wait_until(login_time)
         
@@ -276,11 +254,11 @@ def main(users, action=False):
         logging.info(f"登录完成，共 {len(session_cache)} 个用户登录成功")
         
         # 第二步：等待到预约时间
-        reserve_time = "21:30:00"
+        reserve_time = "14:54:00"
         logging.info(f"等待到预约时间: {reserve_time}")
         wait_until(reserve_time)
         logging.info("开始预约流程")
-
+        
         current_dayofweek = get_current_dayofweek(action)
         total_tasks = sum(len(user["tasks"]) for user in users)
         success_list = [False] * total_tasks
@@ -297,8 +275,19 @@ def main(users, action=False):
         if all(success_list):
             logging.info("所有任务预约成功！")
         else:
-            failed_indices = [i for i, success in enumerate(success_list) if not success]
-            logging.info(f"部分任务预约失败，失败的任务索引: {failed_indices}")
+            # 正确统计失败任务
+            success_count = sum(1 for success in success_list if success)
+            failed_count = len(success_list) - success_count
+            logging.info(f"预约完成，成功: {success_count}, 失败: {failed_count}")
+            
+            # 记录失败任务详情
+            for i, user in enumerate(users):
+                start_index = sum(len(u["tasks"]) for u in users[:i])
+                for j, task in enumerate(user["tasks"]):
+                    idx = start_index + j
+                    if not success_list[idx]:
+                        logging.warning(f"用户 {user['username']} 任务 {j} 预约失败")
+
     else:
         # 非GitHub Actions模式 - 立即执行
         logging.info("本地模式 - 立即执行")
