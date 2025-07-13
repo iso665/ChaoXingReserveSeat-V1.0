@@ -72,6 +72,7 @@ def login_user(user_config, username_override, password_override, action):
     logging.info(f"用户 {username} 登录成功")
     return s
 
+
 def login_all_users(users, usernames, passwords, action):
     """登录所有用户并返回会话缓存"""
     session_cache = {}
@@ -82,27 +83,30 @@ def login_all_users(users, usernames, passwords, action):
         
         if action:
             username_list = usernames.split(',')
-            password_list = passwords.split(',')
-            
             if index < len(username_list):
                 username_override = username_list[index]
             else:
                 logging.error(f"索引 {index} 的用户名缺失")
                 continue
                 
+            password_list = passwords.split(',')
             if index < len(password_list):
                 password_override = password_list[index]
             else:
                 logging.error(f"索引 {index} 的密码缺失")
                 continue
         
-        # 确定缓存键
-        cache_key = username_override or user["username"]
+        # 确定缓存键 - 优先使用覆盖的用户名（手机号）
+        cache_key = username_override if action else user["username"]
         
         # 登录用户
         session = login_user(user, username_override, password_override, action)
         if session:
-            session_cache[cache_key] = session
+            # 使用手机号作为缓存键
+            session_cache[cache_key] = {
+                "session": session,
+                "config_username": user["username"]  # 保存配置中的用户名
+            }
     
     return session_cache
 
@@ -161,11 +165,19 @@ def reserve_all_tasks(session_cache, users, current_dayofweek, success_list):
     with ThreadPoolExecutor(max_workers=len(session_cache)) as executor:
         for idx, user in enumerate(users):
             username = user["username"]
-            session = session_cache.get(username)
-            if not session:
+            
+            # 查找会话 - 优先尝试使用配置用户名，再尝试使用手机号
+            session_info = None
+            for key in session_cache:
+                if session_cache[key]["config_username"] == username:
+                    session_info = session_cache[key]
+                    break
+            
+            if not session_info:
                 logging.warning(f"用户 {username} 无有效会话，跳过")
                 continue
                 
+            session = session_info["session"]
             start_index = start_indices[idx]
             future = executor.submit(
                 reserve_user_tasks,
@@ -188,7 +200,6 @@ def reserve_all_tasks(session_cache, users, current_dayofweek, success_list):
                 new_success_list[start_index + i] = result
     
     return new_success_list
-
 def wait_until(target_time):
     """精确等待到目标时间（北京时间）"""
     logging.info(f"等待目标时间: {target_time}")
