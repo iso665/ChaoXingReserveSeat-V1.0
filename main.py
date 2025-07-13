@@ -276,46 +276,29 @@ def main(users, action=False):
         logging.info(f"登录完成，共 {len(session_cache)} 个用户登录成功")
         
         # 第二步：等待到预约时间
-        reserve_time = "14:54:00"  # 减少等待时间
+        reserve_time = "14:54:00"
         logging.info(f"等待到预约时间: {reserve_time}")
         wait_until(reserve_time)
         logging.info("开始预约流程")
-        
+
         current_dayofweek = get_current_dayofweek(action)
-        success_list = None
         total_tasks = sum(len(user["tasks"]) for user in users)
-        attempt_count = 0
-        
-        while True:
-            attempt_count += 1
-            current_time = get_current_time(action)
-            
-            # 检查是否超过结束时间
-            if current_time >= ENDTIME:
-                logging.info(f"已超过结束时间 {ENDTIME}，停止尝试")
-                break
-                
-            # 并发预约所有任务
-            success_list = reserve_all_tasks(
-                session_cache=session_cache,
-                users=users,
-                current_dayofweek=current_dayofweek,
-                success_list=success_list
-            )
-            
-            # 检查是否所有任务都已完成
-            if all(success_list):
-                logging.info(f"所有任务预约成功! 共尝试 {attempt_count} 次")
-                return
-                
-            # 检查最大尝试次数
-            if attempt_count >= MAX_ATTEMPT:
-                logging.info(f"达到最大尝试次数 {MAX_ATTEMPT}")
-                break
-                
-            # 减少重试等待时间
-            logging.info(f"部分任务未成功，等待 {SLEEPTIME/2} 秒后重试...")
-            time.sleep(SLEEPTIME / 2)  # 使用一半的等待时间
+        success_list = [False] * total_tasks
+
+        # 只执行一次预约流程
+        success_list = reserve_all_tasks(
+            session_cache=session_cache,
+            users=users,
+            current_dayofweek=current_dayofweek,
+            success_list=success_list
+        )
+
+        # 检查结果
+        if all(success_list):
+            logging.info("所有任务预约成功！")
+        else:
+            failed_indices = [i for i, success in enumerate(success_list) if not success]
+            logging.info(f"部分任务预约失败，失败的任务索引: {failed_indices}")
     else:
         # 非GitHub Actions模式 - 立即执行
         logging.info("本地模式 - 立即执行")
