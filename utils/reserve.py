@@ -10,6 +10,7 @@ import random
 import numpy as np
 import cv2
 from urllib3.exceptions import InsecureRequestWarning
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # 禁用不安全的请求警告
 requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
@@ -66,6 +67,10 @@ class reserve:
         self.reserve_next_day = reserve_next_day
         self.beijing_tz = pytz.timezone('Asia/Shanghai')
         self.requests.headers.update(self.login_headers)
+        
+        # 缓存验证码结果
+        self._cached_captcha = None
+        self._last_captcha_time = 0
 
     def get_target_date(self):
         """获取正确的目标预约日期（北京时间）"""
@@ -193,6 +198,8 @@ class reserve:
                 
             obj = response.json()
             if obj.get('status', False):
+                # 标记为已登录
+                self._logged_in = True
                 return (True, '')
             else:
                 msg = obj.get('msg2', '未知错误')
@@ -218,7 +225,12 @@ class reserve:
             logging.error(f"获取roomid异常: {str(e)}")
 
     def resolve_captcha(self):
-        """解决滑块验证码"""
+        """解决滑块验证码（带缓存）"""
+        # 如果10分钟内解决过验证码，复用结果
+        if self._cached_captcha and time.time() - self._last_captcha_time < 600:
+            logging.info("复用缓存的验证码结果")
+            return self._cached_captcha
+            
         try:
             captcha_token, bg, tp = self.get_slide_captcha_data()
             if not captcha_token or not bg or not tp:
@@ -270,7 +282,11 @@ class reserve:
                 extra_data = data.get("extraData", "")
                 try:
                     extra_json = json.loads(extra_data)
-                    return extra_json.get('validate', "")
+                    validate = extra_json.get('validate', "")
+                    # 缓存结果
+                    self._cached_captcha = validate
+                    self._last_captcha_time = time.time()
+                    return validate
                 except Exception:
                     logging.error(f"extraData解析失败: {extra_data}")
                     return ""
@@ -411,9 +427,13 @@ class reserve:
         day_str = self.get_target_date()
         logging.info(f"预约日期: {day_str}, 时段: {start_time}-{end_time}")
         
-        results = []  # 存储每个座位的预约结果
+        # 优化：减少重复登录检查
+        if not self.requests.cookies.get("JSESSIONID"):
+            logging.warning("会话已过期，需要重新登录")
+            return False
         
-        for seat in seatid:
+        # 并行处理每个座位
+        def process_seat(seat):
             logging.info(f"尝试预约座位: {seat}")
             suc = False
             attempt_count = 0
@@ -492,8 +512,6 @@ class reserve:
                     if result.get("success", False):
                         logging.info(f"座位 {seat} 预约成功!")
                         suc = True
-                        results.append(True)
-                        break
                     else:
                         msg = result.get("msg", "未知错误")
                         logging.warning(f"预约失败: {msg}")
@@ -501,7 +519,6 @@ class reserve:
                         # 特定错误处理
                         if "未在系统中开放" in msg:
                             logging.error("时段未开放，停止尝试")
-                            results.append(False)
                             break
                             
                         if "当前人数过多" in msg:
@@ -514,7 +531,12 @@ class reserve:
             
             if not suc:
                 logging.warning(f"座位 {seat} 预约失败，已达最大尝试次数")
-                results.append(False)
+            return suc
+        
+        # 使用线程池并行处理每个座位
+        with ThreadPoolExecutor(max_workers=len(seatid)) as executor:
+            futures = [executor.submit(process_seat, seat) for seat in seatid]
+            results = [future.result() for future in futures]
         
         # 只要有一个座位预约成功就返回True
         return any(results)
