@@ -183,6 +183,11 @@ class reserve:
             # 保存凭证以便重新登录
             self.username = username
             self.password = password
+            
+            # 加密用户名和密码
+            username_enc = AES_Encrypt(username)
+            password_enc = AES_Encrypt(password)
+            
             parm = {
                 "fid": -1,
                 "uname": username_enc,
@@ -191,7 +196,7 @@ class reserve:
                 "t": True
             }
             response = self.requests.post(
-                url=self.login_url, params=parm, verify=False, timeout=10)
+                url=self.login_url, data=parm, verify=False, timeout=10)
             
             if response.status_code != 200:
                 logging.error(f"登录请求失败，状态码: {response.status_code}")
@@ -430,11 +435,6 @@ class reserve:
         day_str = self.get_target_date()
         logging.info(f"预约日期: {day_str}, 时段: {start_time}-{end_time}")
         
-        # 优化：减少重复登录检查
-        if not self.requests.cookies.get("JSESSIONID"):
-            logging.warning("会话已过期，需要重新登录")
-            return False
-        
         # 并行处理每个座位
         def process_seat(seat):
             # 每次尝试前创建独立的会话副本
@@ -452,8 +452,6 @@ class reserve:
                     logging.info("重新登录成功")
                     session_copy.requests.headers.update({'Host': 'office.chaoxing.com'})
         
-            # ... [使用session_copy进行预约] ...
-            
             logging.info(f"尝试预约座位: {seat}")
             suc = False
             attempt_count = 0
@@ -466,7 +464,7 @@ class reserve:
                 token_retry = 0
                 token = ""
                 while token_retry < 5 and not token:
-                    token = self._get_page_token(self.url.format(roomid, seat))
+                    token = session_copy._get_page_token(self.url.format(roomid, seat))
                     if token == "SESSION_EXPIRED":
                         logging.critical("会话过期，无法继续预约")
                         return False
@@ -482,7 +480,7 @@ class reserve:
                 # 处理验证码
                 captcha = ""
                 if self.enable_slider:
-                    captcha = self.resolve_captcha()
+                    captcha = session_copy.resolve_captcha()
                     if not captcha:
                         logging.warning("验证码获取失败，使用空值继续尝试")
                 
@@ -501,9 +499,9 @@ class reserve:
                 parm["enc"] = enc(parm)
                 
                 try:
-                    response = self.requests.post(
+                    response = session_copy.requests.post(
                         url=self.submit_url, 
-                        params=parm, 
+                        data=parm, 
                         verify=True,
                         timeout=15,
                         headers={
@@ -561,6 +559,7 @@ class reserve:
         
         # 只要有一个座位预约成功就返回True
         return any(results)
+        
     def copy_session(self):
         """创建会话的独立副本"""
         new_session = reserve(
@@ -576,7 +575,7 @@ class reserve:
     
         # 复制cookies
         new_session.requests.cookies = requests.cookies.cookiejar_from_dict(
-            self.requests.cookies.get_dict()
+            requests.utils.dict_from_cookiejar(self.requests.cookies)
         )
     
         # 复制headers
