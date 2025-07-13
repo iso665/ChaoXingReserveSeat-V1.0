@@ -29,7 +29,7 @@ SLEEPTIME = 0.2
 ENDTIME = "21:31:00"
 ENABLE_SLIDER = True
 MAX_ATTEMPT = 4  # 增加尝试次数
-RESERVE_TOMORROW = False
+RESERVE_TOMORROW = True
 
 def get_user_credentials(action):
     """从环境变量获取凭证"""
