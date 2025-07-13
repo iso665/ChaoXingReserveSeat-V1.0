@@ -231,7 +231,7 @@ def main(users, action=False):
         logging.info("GitHub Actions 模式 - 启用精确时间控制")
         
         # 第一步：等待到登录时间
-        login_time = "13:03:00"
+        login_time = "13:14:00"
         logging.info(f"等待到登录时间: {login_time}")
         wait_until(login_time)
         
@@ -244,7 +244,7 @@ def main(users, action=False):
         logging.info(f"登录完成，共 {len(session_cache)} 个用户登录成功")
         
         # 第二步：等待到预约时间
-        reserve_time = "13:04:10"
+        reserve_time = "13:14:10"
         logging.info(f"等待到预约时间: {reserve_time}")
         wait_until(reserve_time)
         logging.info("开始预约流程")
