@@ -141,7 +141,15 @@ def process_single_task(session, task, username, global_index, current_dayofweek
             logging.info(f"任务 {global_index} 预约成功!")
         return suc
     except Exception as e:
+        # 添加更详细的错误信息
         logging.error(f"任务 {global_index} 异常: {str(e)}")
+        logging.debug(f"异常详细信息: {repr(e)}")
+        # 记录当前cookies状态
+        try:
+            cookies = session.requests.cookies.get_dict()
+            logging.debug(f"当前cookies: {cookies}")
+        except:
+            logging.debug("无法获取cookies信息")
         return False
 
 def process_user_tasks(session, user, current_dayofweek, success_list, start_index):
