@@ -22,14 +22,38 @@ class reserve:
         self.login_url = "https://passport2.chaoxing.com/fanyalogin"
         self.token = ""
         self.requests = requests.session()
-        self.token_pattern = re.compile("token\s*=\s*['\"](.*?)['\"]")
         
-        # 请求头设置
+        # 添加浏览器特征cookies
+        self.requests.cookies.update({
+            'route': ''.join(random.choices('abcdef0123456789', k=32)),
+            'JSESSIONID': ''.join(random.choices('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', k=32)),
+            '_uid': str(random.randint(10000000, 99999999))
+        })
+        
+        # 增强token提取模式
+        self.token_patterns = [
+            re.compile("token\s*=\s*['\"](.*?)['\"]"),  # 原始模式
+            re.compile("token\s*:\s*['\"](.*?)['\"]"),  # JS变量模式
+            re.compile('<meta\s+name="token"\s+content="(.*?)"')  # meta标签模式
+        ]
+        
+        # 请求头设置 - 添加更多浏览器特征
         self.headers = {
             "Referer": "https://office.chaoxing.com/",
             "Host": "captcha.chaoxing.com",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Connection": "keep-alive",
+            "Upgrade-Insecure-Requests": "1",
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "same-origin",
+            "Pragma": "no-cache",
+            "Cache-Control": "no-cache"
         }
+        
         self.login_headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
             "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
@@ -58,49 +82,83 @@ class reserve:
     def _get_page_token(self, url):
         """获取页面token，带重试机制和详细日志"""
         retry_count = 0
-        max_retries = 3  # 最大重试次数
+        max_retries = 5  # 增加最大重试次数
         
         while retry_count < max_retries:
             try:
                 response = self.requests.get(
                     url=url, 
                     verify=False, 
-                    timeout=10,
+                    timeout=15,  # 增加超时时间
                     headers={
                         "Referer": "https://office.chaoxing.com/",
-                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+                        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+                        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+                        "Accept-Encoding": "gzip, deflate, br",
+                        "Connection": "keep-alive",
+                        "Upgrade-Insecure-Requests": "1",
+                        "Sec-Fetch-Dest": "document",
+                        "Sec-Fetch-Mode": "navigate",
+                        "Sec-Fetch-Site": "same-origin",
+                        "Pragma": "no-cache",
+                        "Cache-Control": "no-cache"
                     }
                 )
+                
+                # 记录HTTP状态码
+                logging.debug(f"获取token页面状态码: {response.status_code}")
                 
                 if response.status_code != 200:
                     logging.warning(f"获取token失败，状态码: {response.status_code}，URL: {url}")
                     retry_count += 1
-                    time.sleep(1)
+                    time.sleep(1.5)  # 增加等待时间
                     continue
                     
-                html = response.content.decode('utf-8')
+                html = response.text
                 
                 # 检查登录状态是否过期
                 if "登录" in html and "请先登录" in html:
                     logging.error("会话已过期，需要重新登录")
                     return "SESSION_EXPIRED"
-                    
-                token_match = self.token_pattern.search(html)
-                if token_match:
-                    return token_match.group(1)
+                
+                # 尝试多种模式匹配token
+                token = None
+                for pattern in self.token_patterns:
+                    token_match = pattern.search(html)
+                    if token_match:
+                        token = token_match.group(1)
+                        break
+                
+                if token:
+                    logging.debug(f"成功获取token: {token}")
+                    return token
                 else:
-                    logging.warning(f"未在页面中找到token，可能页面结构变化，URL: {url}")
-                    logging.debug(f"页面内容: {html[:500]}...")
+                    # 记录关键信息帮助调试
+                    logging.warning(f"未在页面中找到token，URL: {url}")
+                    # 提取页面标题用于调试
+                    title_match = re.search(r'<title>(.*?)</title>', html, re.IGNORECASE)
+                    title = title_match.group(1) if title_match else "无标题"
+                    logging.warning(f"页面标题: {title}")
+                    
+                    # 保存页面内容用于调试（仅当DEBUG级别启用）
+                    if logging.getLogger().isEnabledFor(logging.DEBUG):
+                        timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+                        filename = f"token_fail_{timestamp}.html"
+                        with open(filename, "w", encoding="utf-8") as f:
+                            f.write(html)
+                        logging.debug(f"保存页面内容到: {filename}")
+                    
                     return ""
                     
             except requests.exceptions.Timeout:
                 logging.warning(f"获取token超时，第 {retry_count+1} 次重试")
                 retry_count += 1
-                time.sleep(1)
+                time.sleep(1.5)
             except Exception as e:
                 logging.error(f"获取token异常: {str(e)}")
                 retry_count += 1
-                time.sleep(1)
+                time.sleep(1.5)
         
         logging.error(f"获取token失败，已达最大重试次数 {max_retries}")
         return ""
@@ -338,18 +396,19 @@ class reserve:
                 attempt_count += 1
                 logging.info(f"座位 {seat} 尝试 #{attempt_count}/{self.max_attempt}")
                 
-                # 获取token - 添加额外重试逻辑
+                # 获取token - 增强重试逻辑
                 token_retry = 0
                 token = ""
-                while token_retry < 2 and not token:
+                while token_retry < 5 and not token:  # 增加到5次重试
                     token = self._get_page_token(self.url.format(roomid, seat))
                     if token == "SESSION_EXPIRED":
                         logging.critical("会话过期，无法继续预约")
                         return False
                     if not token:
-                        logging.warning("获取token失败，重试中...")
+                        logging.warning(f"获取token失败，重试中... ({token_retry+1}/5)")
                         token_retry += 1
-                        time.sleep(0.5)
+                        # 随机等待1-2秒，避免固定间隔
+                        time.sleep(1 + random.uniform(0, 1))
                 
                 if not token:
                     logging.error("无法获取有效token，跳过此座位")
