@@ -56,19 +56,54 @@ class reserve:
         return target_date.strftime("%Y-%m-%d")
     
     def _get_page_token(self, url):
-        """获取页面token，带错误处理和超时"""
-        try:
-            response = self.requests.get(url=url, verify=False, timeout=10)
-            if response.status_code != 200:
-                logging.error(f"获取token失败，状态码: {response.status_code}")
-                return ""
+        """获取页面token，带重试机制和详细日志"""
+        retry_count = 0
+        max_retries = 3  # 最大重试次数
+        
+        while retry_count < max_retries:
+            try:
+                response = self.requests.get(
+                    url=url, 
+                    verify=False, 
+                    timeout=10,
+                    headers={
+                        "Referer": "https://office.chaoxing.com/",
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+                    }
+                )
                 
-            html = response.content.decode('utf-8')
-            token_match = self.token_pattern.search(html)
-            return token_match.group(1) if token_match else ""
-        except Exception as e:
-            logging.error(f"获取token异常: {str(e)}")
-            return ""
+                if response.status_code != 200:
+                    logging.warning(f"获取token失败，状态码: {response.status_code}，URL: {url}")
+                    retry_count += 1
+                    time.sleep(1)
+                    continue
+                    
+                html = response.content.decode('utf-8')
+                
+                # 检查登录状态是否过期
+                if "登录" in html and "请先登录" in html:
+                    logging.error("会话已过期，需要重新登录")
+                    return "SESSION_EXPIRED"
+                    
+                token_match = self.token_pattern.search(html)
+                if token_match:
+                    return token_match.group(1)
+                else:
+                    logging.warning(f"未在页面中找到token，可能页面结构变化，URL: {url}")
+                    logging.debug(f"页面内容: {html[:500]}...")
+                    return ""
+                    
+            except requests.exceptions.Timeout:
+                logging.warning(f"获取token超时，第 {retry_count+1} 次重试")
+                retry_count += 1
+                time.sleep(1)
+            except Exception as e:
+                logging.error(f"获取token异常: {str(e)}")
+                retry_count += 1
+                time.sleep(1)
+        
+        logging.error(f"获取token失败，已达最大重试次数 {max_retries}")
+        return ""
 
     def get_login_status(self):
         """获取登录状态"""
@@ -303,13 +338,23 @@ class reserve:
                 attempt_count += 1
                 logging.info(f"座位 {seat} 尝试 #{attempt_count}/{self.max_attempt}")
                 
-                # 获取token
-                token = self._get_page_token(self.url.format(roomid, seat))
-                if not token:
-                    logging.warning("获取token失败，稍后重试")
-                    time.sleep(self.sleep_time)
-                    continue
+                # 获取token - 添加额外重试逻辑
+                token_retry = 0
+                token = ""
+                while token_retry < 2 and not token:
+                    token = self._get_page_token(self.url.format(roomid, seat))
+                    if token == "SESSION_EXPIRED":
+                        logging.critical("会话过期，无法继续预约")
+                        return False
+                    if not token:
+                        logging.warning("获取token失败，重试中...")
+                        token_retry += 1
+                        time.sleep(0.5)
                 
+                if not token:
+                    logging.error("无法获取有效token，跳过此座位")
+                    continue
+                    
                 # 处理验证码
                 captcha = ""
                 if self.enable_slider:
@@ -336,20 +381,29 @@ class reserve:
                         url=self.submit_url, 
                         params=parm, 
                         verify=True,
-                        timeout=15
+                        timeout=15,
+                        headers={
+                            "Referer": f"https://office.chaoxing.com/front/third/apps/seat/code?id={roomid}&seatNum={seat}",
+                            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+                            "X-Requested-With": "XMLHttpRequest"
+                        }
                     )
                     
                     if response.status_code != 200:
                         logging.warning(f"预约请求失败，状态码: {response.status_code}")
+                        # 记录响应内容以便调试
+                        logging.debug(f"响应内容: {response.text[:500]}")
                         time.sleep(self.sleep_time)
                         continue
                     
                     try:
                         result = response.json()
                     except json.JSONDecodeError:
-                        logging.error(f"响应JSON解析失败: {response.text[:200]}")
+                        logging.error(f"响应JSON解析失败: {response.text[:500]}")
                         time.sleep(self.sleep_time)
                         continue
+                    
+                    logging.info(f"预约响应: {result}")
                     
                     if result.get("success", False):
                         logging.info(f"座位 {seat} 预约成功!")
@@ -368,7 +422,7 @@ class reserve:
                             
                         if "当前人数过多" in msg:
                             logging.warning("系统繁忙，稍后重试")
-                            time.sleep(0.5)  # 稍长等待
+                            time.sleep(0.5)
                 except Exception as e:
                     logging.error(f"请求异常: {str(e)}")
                 
