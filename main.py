@@ -45,8 +45,12 @@ def get_user_credentials(action):
 
 def login_user(user_config, username_override, password_override, action):
     """处理单个用户的登录"""
-    username = user_config["username"]
-    password = user_config["password"]
+    # ... [登录代码不变] ...
+    
+    # 登录成功后保存凭证以便重新登录
+    if login_result[0]:
+        s.username = username  # 保存用户名
+        s.password = password  # 保存密码
     
     # 使用覆盖的凭据（如果提供了）
     if action and username_override:
@@ -115,8 +119,19 @@ def login_all_users(users, usernames, passwords, action):
             }
     
     return session_cache
-
 def process_single_task(session, task, username, global_index, current_dayofweek, is_success):
+    """处理单个预约任务"""
+    # 在任务开始前检查会话有效性
+    if not session.requests.cookies.get("JSESSIONID"):
+        logging.warning("会话已过期，尝试重新登录")
+        # 尝试重新登录
+        login_result = session.login(session.username, session.password)
+        if not login_result[0]:
+            logging.error(f"重新登录失败: {login_result[1]}")
+            return False
+        else:
+            logging.info("重新登录成功")
+            session.requests.headers.update({'Host': 'office.chaoxing.com'})
     """处理单个预约任务"""
     times = task["time"]
     roomid = task["roomid"]
