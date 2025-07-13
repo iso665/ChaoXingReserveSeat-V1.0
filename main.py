@@ -27,7 +27,7 @@ def get_current_dayofweek(action):
 # 全局配置
 SLEEPTIME = 0.2
 ENDTIME = "21:31:00"
-ENABLE_SLIDER = True
+ENABLE_SLIDER = False
 MAX_ATTEMPT = 1  # 增加尝试次数
 RESERVE_TOMORROW = False
 
