@@ -28,7 +28,7 @@ def get_current_dayofweek(action):
 SLEEPTIME = 0.2
 ENDTIME = "21:31:00"
 ENABLE_SLIDER = True
-MAX_ATTEMPT = 4  # 增加尝试次数
+MAX_ATTEMPT = 1  # 增加尝试次数
 RESERVE_TOMORROW = True
 
 def get_user_credentials(action):
@@ -231,7 +231,7 @@ def main(users, action=False):
         logging.info("GitHub Actions 模式 - 启用精确时间控制")
         
         # 第一步：等待到登录时间
-        login_time = "13:14:00"
+        login_time = "13:134:00"
         logging.info(f"等待到登录时间: {login_time}")
         wait_until(login_time)
         
@@ -244,7 +244,7 @@ def main(users, action=False):
         logging.info(f"登录完成，共 {len(session_cache)} 个用户登录成功")
         
         # 第二步：等待到预约时间
-        reserve_time = "13:14:10"
+        reserve_time = "13:34:10"
         logging.info(f"等待到预约时间: {reserve_time}")
         wait_until(reserve_time)
         logging.info("开始预约流程")
