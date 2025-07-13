@@ -321,11 +321,12 @@ class reserve:
                 "b": "a"
             }
             
-            # 添加Referer头防止404错误
+            # 添加User-Agent头防止403错误
             headers_with_referer = {
                 **self.headers,
-                "Referer": "https://office.chaoxing.com/"
-            }
+                "Referer": "https://office.chaoxing.com/",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+            } 
             
             response = self.requests.get(
                 url=url, 
@@ -435,10 +436,22 @@ class reserve:
         
         # 并行处理每个座位
         def process_seat(seat):
-            # 检查会话有效性 - 在每次尝试前检查
-            if not self.requests.cookies.get("JSESSIONID"):
-                logging.warning("会话已过期，需要重新登录")
-                return False
+            # 每次尝试前创建独立的会话副本
+            session_copy = self.copy_session()
+        
+            # 检查会话有效性 - 使用副本
+            if not session_copy.requests.cookies.get("JSESSIONID"):
+                logging.warning("会话已过期，尝试重新登录")
+                # 尝试重新登录
+                login_result = session_copy.login(session_copy.username, session_copy.password)
+                if not login_result[0]:
+                    logging.error(f"重新登录失败: {login_result[1]}")
+                    return False
+                else:
+                    logging.info("重新登录成功")
+                    session_copy.requests.headers.update({'Host': 'office.chaoxing.com'})
+        
+            # ... [使用session_copy进行预约] ...
             
             logging.info(f"尝试预约座位: {seat}")
             suc = False
@@ -547,3 +560,25 @@ class reserve:
         
         # 只要有一个座位预约成功就返回True
         return any(results)
+    def copy_session(self):
+        """创建会话的独立副本"""
+        new_session = reserve(
+            sleep_time=self.sleep_time,
+            max_attempt=self.max_attempt,
+            enable_slider=self.enable_slider,
+            reserve_next_day=self.reserve_next_day
+        )
+    
+        # 复制凭证
+        new_session.username = self.username
+        new_session.password = self.password
+    
+        # 复制cookies
+        new_session.requests.cookies = requests.cookies.cookiejar_from_dict(
+            self.requests.cookies.get_dict()
+        )
+    
+        # 复制headers
+        new_session.requests.headers = self.requests.headers.copy()
+    
+        return new_session
