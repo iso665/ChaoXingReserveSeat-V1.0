@@ -6,7 +6,7 @@ import logging
 import datetime
 import pytz
 import threading
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 from utils import reserve
@@ -25,11 +25,11 @@ def get_current_dayofweek(action):
     return now.strftime("%A")
 
 # 全局配置
-SLEEPTIME = 0.2
+SLEEPTIME = 0.1  # 减少等待时间
 ENDTIME = "21:31:00"
-ENABLE_SLIDER = False
-MAX_ATTEMPT = 1  # 增加尝试次数
-RESERVE_TOMORROW = False
+ENABLE_SLIDER = True
+MAX_ATTEMPT = 3  # 减少尝试次数
+RESERVE_TOMORROW = True
 
 def get_user_credentials(action):
     """从环境变量获取凭证"""
@@ -61,6 +61,12 @@ def login_user(user_config, username_override, password_override, action):
         enable_slider=ENABLE_SLIDER,
         reserve_next_day=RESERVE_TOMORROW
     )
+    
+    # 检查会话是否已存在
+    if hasattr(s, '_logged_in') and s._logged_in:
+        logging.info(f"用户 {username} 会话已存在，直接使用")
+        return s
+    
     s.get_login_status()
     login_result = s.login(username, password)
     
@@ -110,40 +116,58 @@ def login_all_users(users, usernames, passwords, action):
     
     return session_cache
 
-def reserve_user_tasks(session, username, user, current_dayofweek, success_list, start_index):
-    """处理单个用户的所有预约任务"""
-    task_results = []
+def process_single_task(session, task, username, global_index, current_dayofweek, is_success):
+    """处理单个预约任务"""
+    times = task["time"]
+    roomid = task["roomid"]
+    seatid = task["seatid"]
+    daysofweek = task["daysofweek"]
     
-    for task_index, task in enumerate(user["tasks"]):
-        global_index = start_index + task_index
-        times = task["time"]
-        roomid = task["roomid"]
-        seatid = task["seatid"]
-        daysofweek = task["daysofweek"]
+    if isinstance(seatid, str):
+        seatid = [seatid]
+    
+    if current_dayofweek not in daysofweek:
+        logging.info(f"任务 {global_index}: 今天不预约")
+        return False
+    
+    if is_success:
+        logging.info(f"任务 {global_index} 已成功预约，跳过")
+        return True
         
-        # 确保seatid是列表
-        if isinstance(seatid, str):
-            seatid = [seatid]
+    logging.info(f"----------- {username} -- 任务 {global_index}: {times} -- {seatid} 尝试预约 -----------")
+    try:
+        suc = session.submit(times, roomid, seatid, True)
+        if suc:
+            logging.info(f"任务 {global_index} 预约成功!")
+        return suc
+    except Exception as e:
+        logging.error(f"任务 {global_index} 异常: {str(e)}")
+        return False
+
+def process_user_tasks(session, user, current_dayofweek, success_list, start_index):
+    """并行处理单个用户的所有预约任务"""
+    task_results = []
+    username = user["username"]
+    
+    # 使用线程池处理用户的所有任务
+    with ThreadPoolExecutor(max_workers=len(user["tasks"])) as executor:
+        futures = []
+        for task_index, task in enumerate(user["tasks"]):
+            global_index = start_index + task_index
+            futures.append(executor.submit(
+                process_single_task,
+                session=session,
+                task=task,
+                username=username,
+                global_index=global_index,
+                current_dayofweek=current_dayofweek,
+                is_success=success_list[global_index]
+            ))
         
-        if current_dayofweek not in daysofweek:
-            logging.info(f"任务 {global_index}: 今天不预约")
-            task_results.append(False)
-            continue
-        
-        if success_list[global_index]:
-            logging.info(f"任务 {global_index} 已成功预约，跳过")
-            task_results.append(True)
-            continue
-            
-        logging.info(f"----------- {username} -- 任务 {global_index}: {times} -- {seatid} 尝试预约 -----------")
-        try:
-            suc = session.submit(times, roomid, seatid, True)
-            task_results.append(suc)
-            if suc:
-                logging.info(f"任务 {global_index} 预约成功!")
-        except Exception as e:
-            logging.error(f"任务 {global_index} 异常: {str(e)}")
-            task_results.append(False)
+        # 收集结果
+        for future in as_completed(futures):
+            result = future.result()
+            task_results.append(result)
     
     return task_results
 
@@ -180,9 +204,8 @@ def reserve_all_tasks(session_cache, users, current_dayofweek, success_list):
             session = session_info["session"]
             start_index = start_indices[idx]
             future = executor.submit(
-                reserve_user_tasks,
+                process_user_tasks,
                 session=session,
-                username=username,
                 user=user,
                 current_dayofweek=current_dayofweek,
                 success_list=success_list,
@@ -192,7 +215,7 @@ def reserve_all_tasks(session_cache, users, current_dayofweek, success_list):
     
     # 收集结果
     new_success_list = success_list.copy()
-    for future in futures:
+    for future in as_completed(futures):
         results = future.result()
         if results:
             start_index = start_indices[futures.index(future)]
@@ -200,6 +223,7 @@ def reserve_all_tasks(session_cache, users, current_dayofweek, success_list):
                 new_success_list[start_index + i] = result
     
     return new_success_list
+
 def wait_until(target_time):
     """精确等待到目标时间（北京时间）"""
     logging.info(f"等待目标时间: {target_time}")
@@ -231,7 +255,7 @@ def main(users, action=False):
         logging.info("GitHub Actions 模式 - 启用精确时间控制")
         
         # 第一步：等待到登录时间
-        login_time = "13:55:00"
+        login_time = "13:36:00"
         logging.info(f"等待到登录时间: {login_time}")
         wait_until(login_time)
         
@@ -244,7 +268,7 @@ def main(users, action=False):
         logging.info(f"登录完成，共 {len(session_cache)} 个用户登录成功")
         
         # 第二步：等待到预约时间
-        reserve_time = "13:55:10"
+        reserve_time = "13:36:05"  # 减少等待时间
         logging.info(f"等待到预约时间: {reserve_time}")
         wait_until(reserve_time)
         logging.info("开始预约流程")
@@ -281,16 +305,17 @@ def main(users, action=False):
                 logging.info(f"达到最大尝试次数 {MAX_ATTEMPT}")
                 break
                 
-            # 等待后重试
-            logging.info(f"部分任务未成功，等待 {SLEEPTIME} 秒后重试...")
-            time.sleep(SLEEPTIME)
+            # 减少重试等待时间
+            logging.info(f"部分任务未成功，等待 {SLEEPTIME/2} 秒后重试...")
+            time.sleep(SLEEPTIME / 2)  # 使用一半的等待时间
     else:
         # 非GitHub Actions模式 - 立即执行
         logging.info("本地模式 - 立即执行")
         usernames, passwords = "", ""
         session_cache = login_all_users(users, usernames, passwords, action)
         current_dayofweek = get_current_dayofweek(action)
-        success_list = reserve_all_tasks(session_cache, users, current_dayofweek, None)
+        success_list = [False] * sum(len(user["tasks"]) for user in users)
+        success_list = reserve_all_tasks(session_cache, users, current_dayofweek, success_list)
         logging.info(f"预约结果: {success_list}")
 
 def debug(users, action=False):
@@ -309,28 +334,26 @@ def debug(users, action=False):
         if not user:
             continue
             
-        for task_index, task in enumerate(user["tasks"]):
-            times = task["time"]
-            roomid = task["roomid"]
-            seatid = task["seatid"]
-            daysofweek = task["daysofweek"]
+        # 并行处理用户的所有任务
+        with ThreadPoolExecutor(max_workers=len(user["tasks"])) as executor:
+            futures = []
+            for task_index, task in enumerate(user["tasks"]):
+                futures.append(executor.submit(
+                    process_single_task,
+                    session=session["session"],
+                    task=task,
+                    username=username,
+                    global_index=task_index+1,
+                    current_dayofweek=current_dayofweek,
+                    is_success=False
+                ))
             
-            if isinstance(seatid, str):
-                seatid = [seatid]
-            
-            if current_dayofweek not in daysofweek:
-                logging.info(f"任务 {task_index}: 今天不预约")
-                continue
-            
-            logging.info(f"----------- {username} -- 任务 {task_index+1}: {times} -- {seatid} 尝试 -----------")
-            try:
-                suc = session.submit(times, roomid, seatid, action)
-                if suc:
-                    logging.info(f"任务 {task_index+1} 预约成功!")
-                else:
-                    logging.warning(f"任务 {task_index+1} 预约失败")
-            except Exception as e:
-                logging.error(f"任务 {task_index+1} 异常: {str(e)}")
+            for future in as_completed(futures):
+                try:
+                    result = future.result()
+                    logging.info(f"任务完成，结果: {result}")
+                except Exception as e:
+                    logging.error(f"任务异常: {str(e)}")
 
 def get_roomid(args1, args2):
     username = input("用户名：")
