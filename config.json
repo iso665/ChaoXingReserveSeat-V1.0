@@ -11,15 +11,15 @@
                     "daysofweek": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday","Saturday" , "Sunday"]
                 },
                 {
-                    "time": ["13:00", "18:00"],
+                    "time": ["14:30", "18:00"],
                     "roomid": "8215",
                     "seatid": ["137"],
                     "daysofweek": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday","Saturday" , "Sunday"]
                 },
                 {
-                    "time": ["21:00", "22:00"],
+                    "time": ["18:30", "22:00"],
                     "roomid": "8215",
-                    "seatid": ["033"],
+                    "seatid": ["137"],
                     "daysofweek": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday","Saturday" , "Sunday"]
                 }
             ]
