@@ -180,8 +180,9 @@ class reserve:
     def login(self, username, password):
         """用户登录"""
         try:
-            username_enc = AES_Encrypt(username)
-            password_enc = AES_Encrypt(password)
+            # 保存凭证以便重新登录
+            self.username = username
+            self.password = password
             parm = {
                 "fid": -1,
                 "uname": username_enc,
