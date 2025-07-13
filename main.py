@@ -162,11 +162,11 @@ def reserve_all_tasks(session_cache, users, current_dayofweek, success_list):
     
     # 使用线程池并发执行预约
     futures = []
-    with ThreadPoolExecutor(max_workers=len(session_cache)) as executor:
+    with ThreadPoolExecutor(max_workers=min(len(session_cache), 4)) as executor:  # 限制并发线程数
         for idx, user in enumerate(users):
             username = user["username"]
             
-            # 查找会话 - 优先尝试使用配置用户名，再尝试使用手机号
+            # 查找会话 - 优先尝试使用配置用户名
             session_info = None
             for key in session_cache:
                 if session_cache[key]["config_username"] == username:
