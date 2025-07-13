@@ -24,6 +24,17 @@ def get_current_dayofweek(action):
     now = datetime.datetime.now(tz)
     return now.strftime("%A")
 
+# 等待直到指定时间
+def wait_until(target_time):
+    """等待直到指定时间（北京时间）"""
+    tz = pytz.timezone('Asia/Shanghai')
+    while True:
+        now = datetime.datetime.now(tz)
+        current_time = now.strftime("%H:%M:%S")
+        if current_time >= target_time:
+            break
+        time.sleep(0.5)
+
 # 全局配置
 SLEEPTIME = 0.1  # 减少等待时间
 ENDTIME = "21:31:00"
@@ -45,19 +56,17 @@ def get_user_credentials(action):
 
 def login_user(user_config, username_override, password_override, action):
     """处理单个用户的登录"""
-    # ... [登录代码不变] ...
-    
-    # 登录成功后保存凭证以便重新登录
-    if login_result[0]:
-        s.username = username  # 保存用户名
-        s.password = password  # 保存密码
-    
     # 使用覆盖的凭据（如果提供了）
     if action and username_override:
         username = username_override
+    else:
+        username = user_config["username"]
+        
     if action and password_override:
         password = password_override
-        
+    else:
+        password = user_config["password"]
+    
     logging.info(f"----------- {username} 登录中 -----------")
     s = reserve(
         sleep_time=SLEEPTIME,
@@ -80,6 +89,11 @@ def login_user(user_config, username_override, password_override, action):
         
     s.requests.headers.update({'Host': 'office.chaoxing.com'})
     logging.info(f"用户 {username} 登录成功")
+    
+    # 登录成功后保存凭证以便重新登录
+    s.username = username
+    s.password = password
+    
     return s
 
 
@@ -92,33 +106,32 @@ def login_all_users(users, usernames, passwords, action):
         password_override = None
         
         if action:
-            username_list = usernames.split(',')
+            username_list = usernames.split(',') if usernames else []
             if index < len(username_list):
                 username_override = username_list[index]
             else:
                 logging.error(f"索引 {index} 的用户名缺失")
                 continue
                 
-            password_list = passwords.split(',')
+            password_list = passwords.split(',') if passwords else []
             if index < len(password_list):
                 password_override = password_list[index]
             else:
                 logging.error(f"索引 {index} 的密码缺失")
                 continue
         
-        # 确定缓存键 - 优先使用覆盖的用户名（手机号）
-        cache_key = username_override if action else user["username"]
-        
         # 登录用户
         session = login_user(user, username_override, password_override, action)
         if session:
             # 使用手机号作为缓存键
+            cache_key = username_override if action else user["username"]
             session_cache[cache_key] = {
                 "session": session,
                 "config_username": user["username"]  # 保存配置中的用户名
             }
     
     return session_cache
+
 def process_single_task(session, task, username, global_index, current_dayofweek, is_success):
     """处理单个预约任务"""
     # 在任务开始前检查会话有效性
@@ -132,7 +145,7 @@ def process_single_task(session, task, username, global_index, current_dayofweek
         else:
             logging.info("重新登录成功")
             session.requests.headers.update({'Host': 'office.chaoxing.com'})
-    """处理单个预约任务"""
+    
     times = task["time"]
     roomid = task["roomid"]
     seatid = task["seatid"]
@@ -158,13 +171,6 @@ def process_single_task(session, task, username, global_index, current_dayofweek
     except Exception as e:
         # 添加更详细的错误信息
         logging.error(f"任务 {global_index} 异常: {str(e)}")
-        logging.debug(f"异常详细信息: {repr(e)}")
-        # 记录当前cookies状态
-        try:
-            cookies = session.requests.cookies.get_dict()
-            logging.debug(f"当前cookies: {cookies}")
-        except:
-            logging.debug("无法获取cookies信息")
         return False
 
 def process_user_tasks(session, user, current_dayofweek, success_list, start_index):
@@ -223,7 +229,8 @@ def reserve_all_tasks(session_cache, users, current_dayofweek, success_list):
                 # 标记该用户的所有任务为失败
                 start_index = start_indices[idx]
                 for i in range(len(user["tasks"])):
-                    success_list[start_index + i] = False
+                    if start_index + i < len(success_list):
+                        success_list[start_index + i] = False
                 continue
                 
             session = session_info["session"]
@@ -243,9 +250,13 @@ def reserve_all_tasks(session_cache, users, current_dayofweek, success_list):
     for future in as_completed(futures):
         results = future.result()
         if results:
-            start_index = start_indices[futures.index(future)]
+            # 找到对应的用户索引
+            idx = futures.index(future)
+            start_index = start_indices[idx]
+            # 只更新当前用户的任务结果
             for i, result in enumerate(results):
-                new_success_list[start_index + i] = result
+                if start_index + i < len(new_success_list):
+                    new_success_list[start_index + i] = result
     
     return new_success_list
 
@@ -300,7 +311,7 @@ def main(users, action=False):
                 start_index = sum(len(u["tasks"]) for u in users[:i])
                 for j, task in enumerate(user["tasks"]):
                     idx = start_index + j
-                    if not success_list[idx]:
+                    if idx < len(success_list) and not success_list[idx]:
                         logging.warning(f"用户 {user['username']} 任务 {j} 预约失败")
 
     else:
@@ -309,7 +320,8 @@ def main(users, action=False):
         usernames, passwords = "", ""
         session_cache = login_all_users(users, usernames, passwords, action)
         current_dayofweek = get_current_dayofweek(action)
-        success_list = [False] * sum(len(user["tasks"]) for user in users)
+        total_tasks = sum(len(user["tasks"]) for user in users)
+        success_list = [False] * total_tasks
         success_list = reserve_all_tasks(session_cache, users, current_dayofweek, success_list)
         logging.info(f"预约结果: {success_list}")
 
