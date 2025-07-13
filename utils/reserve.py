@@ -24,10 +24,9 @@ class reserve:
         self.token = ""
         self.requests = requests.session()
         
-        # 添加浏览器特征cookies
+        # 修改后的cookies设置 - 移除了JSESSIONID
         self.requests.cookies.update({
             'route': ''.join(random.choices('abcdef0123456789', k=32)),
-            'JSESSIONID': ''.join(random.choices('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', k=32)),
             '_uid': str(random.randint(10000000, 99999999))
         })
         
@@ -71,6 +70,7 @@ class reserve:
         # 缓存验证码结果
         self._cached_captcha = None
         self._last_captcha_time = 0
+
 
     def get_target_date(self):
         """获取正确的目标预约日期（北京时间）"""
@@ -434,6 +434,11 @@ class reserve:
         
         # 并行处理每个座位
         def process_seat(seat):
+            # 清理可能重复的cookies
+            self.requests.cookies.clear_expired_cookies()
+            if 'JSESSIONID' in self.requests.cookies:
+                del self.requests.cookies['JSESSIONID']
+            
             logging.info(f"尝试预约座位: {seat}")
             suc = False
             attempt_count = 0
@@ -533,6 +538,7 @@ class reserve:
                 logging.warning(f"座位 {seat} 预约失败，已达最大尝试次数")
             return suc
         
+
         # 使用线程池并行处理每个座位
         with ThreadPoolExecutor(max_workers=len(seatid)) as executor:
             futures = [executor.submit(process_seat, seat) for seat in seatid]
