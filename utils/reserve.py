@@ -303,118 +303,73 @@ class reserve:
             logging.error(f"验证码处理异常: {str(e)}")
             return ""
 
+
     def get_slide_captcha_data(self):
-        """获取滑块验证码数据"""
-        try:
-            # 修改URL使用HTTPS
-            url = "https://captcha.chaoxing.com/captcha/get/verification/image"
-            timestamp = int(time.time() * 1000)
-            captcha_key, token = generate_captcha_key(timestamp)
-            
-            # 生成随机callback函数名
-            callback_name = f"jQuery{random.randint(100000000000, 999999999999)}_{timestamp}"
-            
-            params = {
-                "callback": callback_name,
-                "captchaId": "42sxgHoTPTKbt0uZxPJ7ssOvtXr3ZgZ1",
-                "type": "slide",
-                "version": "1.1.18",
-                "captchaKey": captcha_key,
-                "token": token,
-                "referer": "https://office.chaoxing.com/",
-                "_": timestamp,
-                "d": "a",
-                "b": "a"
-            }
-            
-            # 添加User-Agent头防止403错误
-            headers_with_referer = {
-                **self.headers,
-                "Referer": "https://office.chaoxing.com/",
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
-            } 
-            
-            response = self.requests.get(
-                url=url, 
-                params=params, 
-                headers=headers_with_referer,
-                timeout=15
-            )
-            
-            if response.status_code != 200:
-                logging.error(f"获取验证码数据失败，状态码: {response.status_code}")
-                return "", "", ""
-                
-            content = response.text
-            
-            # 处理JSONP响应
-            if not content.startswith(callback_name):
-                logging.error(f"验证码数据响应格式错误: {content[:100]}")
-                return "", "", ""
-                
-            json_str = content.replace(callback_name, "", 1).strip("();")
-            
-            try:
-                data = json.loads(json_str)
-            except json.JSONDecodeError:
-                logging.error(f"验证码数据JSON解析失败: {json_str[:200]}")
-                return "", "", ""
-                
-            captcha_token = data.get("token", "")
-            image_data = data.get("imageVerificationVo", {})
-            bg = image_data.get("shadeImage", "")
-            tp = image_data.get("cutoutImage", "")
-            
-            # 记录获取的URL用于调试
-            logging.debug(f"获取验证码数据: bg={bg}, tp={tp}")
-            
-            return captcha_token, bg, tp
-        except Exception as e:
-            logging.error(f"获取验证码数据异常: {str(e)}")
-            return "", "", ""
+        url = "https://captcha.chaoxing.com/captcha/get/verification/image"
+        timestamp = int(time.time() * 1000)
+        capture_key, token = generate_captcha_key(timestamp)
+        referer = f"https://office.chaoxing.com/front/third/apps/seat/code?id=3993&seatNum=0199"
+        params = {
+            "callback": f"jQuery33107685004390294206_1716461324846",
+            "captchaId": "42sxgHoTPTKbt0uZxPJ7ssOvtXr3ZgZ1",
+            "type": "slide",
+            "version": "1.1.18",
+            "captchaKey": capture_key,
+            "token": token,
+            "referer": referer,
+            "_": timestamp,
+            "d": "a",
+            "b": "a"
+        }
+        response = self.requests.get(url=url, params=params, headers=self.headers)
+        content = response.text
+        
+        data = content.replace("jQuery33107685004390294206_1716461324846(",
+                            ")").replace(")", "")
+        data = json.loads(data)
+        captcha_token = data["token"]
+        bg = data["imageVerificationVo"]["shadeImage"]
+        tp = data["imageVerificationVo"]["cutoutImage"]
+        return captcha_token, bg, tp
     
-    def calculate_slide_distance(self, bg_url, tp_url):
-        """计算滑块需要移动的距离"""
-        try:
-            # 下载背景图
-            bg_response = self.requests.get(bg_url, timeout=15)
-            if bg_response.status_code != 200:
-                logging.error(f"下载背景图失败，状态码: {bg_response.status_code}")
-                return None
-            bg_img = cv2.imdecode(np.frombuffer(bg_response.content, np.uint8), cv2.IMREAD_COLOR)
-            
-            # 下载滑块图
-            tp_response = self.requests.get(tp_url, timeout=15)
-            if tp_response.status_code != 200:
-                logging.error(f"下载滑块图失败，状态码: {tp_response.status_code}")
-                return None
-            tp_img = cv2.imdecode(np.frombuffer(tp_response.content, np.uint8), cv2.IMREAD_UNCHANGED)
-            
-            # 提取滑块
-            if tp_img.shape[2] == 4:  # 带alpha通道
-                mask = tp_img[:, :, 3]
-                mask = cv2.threshold(mask, 1, 255, cv2.THRESH_BINARY)[1]
-                x, y, w, h = cv2.boundingRect(mask)
-                tp_img = tp_img[y:y+h, x:x+w, :3]
-            
-            # 边缘检测
-            bg_edge = cv2.Canny(bg_img, 100, 200)
-            tp_edge = cv2.Canny(tp_img, 100, 200)
-            
-            # 模板匹配
-            result = cv2.matchTemplate(bg_edge, tp_edge, cv2.TM_CCOEFF_NORMED)
-            _, max_val, _, max_loc = cv2.minMaxLoc(result)
-            
-            if max_val < 0.4:  # 匹配阈值
-                logging.warning(f"模板匹配可信度低: {max_val}")
-                
-            return max_loc[0]
-        except ImportError:
-            logging.error("缺少OpenCV依赖，请安装opencv-python")
-            return None
-        except Exception as e:
-            logging.error(f"计算滑块距离异常: {str(e)}")
-            return None
+    def x_distance(self, bg, tp):
+        import numpy as np
+        import cv2
+        def cut_slide(slide):
+            slider_array = np.frombuffer(slide, np.uint8)
+            slider_image = cv2.imdecode(slider_array, cv2.IMREAD_UNCHANGED)
+            slider_part = slider_image[:, :, :3]
+            mask = slider_image[:, :, 3]
+            mask[mask != 0] = 255
+            x, y, w, h = cv2.boundingRect(mask)
+            cropped_image = slider_part[y:y + h, x:x + w]
+            return cropped_image
+        c_captcha_headers = {
+            "Referer": "https://office.chaoxing.com/",
+            "Host": "captcha-b.chaoxing.com",
+            "Pragma" : 'no-cache',
+            "Sec-Ch-Ua": '"Google Chrome";v="125", "Chromium";v="125", "Not.A/Brand";v="24"',
+            'Sec-Ch-Ua-Mobile':'?0',
+            'Sec-Ch-Ua-Platform':'"Linux"',
+            'Sec-Fetch-Dest':'document',
+            'Sec-Fetch-Mode':'navigate',
+            'Sec-Fetch-Site':'none',
+            'Sec-Fetch-User':'?1',
+            'Upgrade-Insecure-Requests':'1',
+            'User-Agent':'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
+        }
+        bgc, tpc = self.requests.get(bg, headers=c_captcha_headers), self.requests.get(tp, headers=c_captcha_headers)
+        bg, tp = bgc.content, tpc.content 
+        bg_img = cv2.imdecode(np.frombuffer(bg, np.uint8), cv2.IMREAD_COLOR)  
+        tp_img = cut_slide(tp)
+        bg_edge = cv2.Canny(bg_img, 100, 200)
+        tp_edge = cv2.Canny(tp_img, 100, 200)
+        bg_pic = cv2.cvtColor(bg_edge, cv2.COLOR_GRAY2RGB)
+        tp_pic = cv2.cvtColor(tp_edge, cv2.COLOR_GRAY2RGB)
+        res = cv2.matchTemplate(bg_pic, tp_pic, cv2.TM_CCOEFF_NORMED)
+        _, _, _, max_loc = cv2.minMaxLoc(res)  
+        tl = max_loc
+        return tl[0]
 
     def submit(self, times, roomid, seatid, action):
         """提交预约请求"""
