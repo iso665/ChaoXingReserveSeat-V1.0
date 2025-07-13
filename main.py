@@ -195,7 +195,7 @@ def main(users, action=False):
         logging.info("GitHub Actions 模式 - 启用精确时间控制")
         
         # 第一步：等待到北京时间 09:44:00
-        wait_until("09:44:00", action)
+        wait_until("10:19:00", action)
         logging.info("开始账号登录流程")
         
         # 获取凭证
@@ -206,7 +206,7 @@ def main(users, action=False):
         logging.info("账号登录完成")
         
         # 第二步：等待到北京时间 09:45:00
-        wait_until("09:45:00", action)
+        wait_until("10:20:00", action)
         logging.info("开始预约流程")
         
         attempt_times = 0
