@@ -3,20 +3,36 @@ import time
 import argparse
 import os
 import logging
+import datetime
+import pytz
+import threading
+from concurrent.futures import ThreadPoolExecutor
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 from utils import reserve
 
-get_current_time = lambda action: time.strftime("%H:%M:%S", time.localtime(time.time() + 8*3600)) if action else time.strftime("%H:%M:%S", time.localtime(time.time()))
-get_current_dayofweek = lambda action: time.strftime("%A", time.localtime(time.time() + 8*3600)) if action else time.strftime("%A", time.localtime(time.time()))
+# 修复时间处理函数 - 使用pytz正确处理时区
+def get_current_time(action):
+    """获取当前北京时间"""
+    tz = pytz.timezone('Asia/Shanghai')
+    now = datetime.datetime.now(tz)
+    return now.strftime("%H:%M:%S")
 
+def get_current_dayofweek(action):
+    """获取当前星期几（英文）"""
+    tz = pytz.timezone('Asia/Shanghai')
+    now = datetime.datetime.now(tz)
+    return now.strftime("%A")
+
+# 全局配置
 SLEEPTIME = 0.2
 ENDTIME = "21:31:00"
 ENABLE_SLIDER = True
-MAX_ATTEMPT = 1
-RESERVE_TOMORROW = True  # 使用正确的变量名
+MAX_ATTEMPT = 4  # 增加尝试次数
+RESERVE_TOMORROW = True
 
 def get_user_credentials(action):
+    """从环境变量获取凭证"""
     if action:
         try:
             usernames = os.environ['USERNAMES']
@@ -27,206 +43,318 @@ def get_user_credentials(action):
             return "", ""
     return "", ""
 
-def login_and_reserve(users, usernames, passwords, action, success_list=None):
-    # 修复日志输出中的变量名
-    logging.info(f"Global settings: \nSLEEPTIME: {SLEEPTIME}\nENDTIME: {ENDTIME}\nENABLE_SLIDER: {ENABLE_SLIDER}\nRESERVE_TOMORROW: {RESERVE_TOMORROW}")
+def login_user(user_config, username_override, password_override, action):
+    """处理单个用户的登录"""
+    username = user_config["username"]
+    password = user_config["password"]
     
-    if action and len(usernames.split(",")) != len(users):
-        raise Exception("user number should match the number of config")
-    if success_list is None:
-        total_tasks = sum(len(user["tasks"]) for user in users)
+    # 使用覆盖的凭据（如果提供了）
+    if action and username_override:
+        username = username_override
+    if action and password_override:
+        password = password_override
+        
+    logging.info(f"----------- {username} 登录中 -----------")
+    s = reserve(
+        sleep_time=SLEEPTIME,
+        max_attempt=MAX_ATTEMPT,
+        enable_slider=ENABLE_SLIDER,
+        reserve_next_day=RESERVE_TOMORROW
+    )
+    s.get_login_status()
+    login_result = s.login(username, password)
+    
+    if not login_result[0]:
+        logging.error(f"登录失败: {login_result[1]}")
+        return None
+        
+    s.requests.headers.update({'Host': 'office.chaoxing.com'})
+    logging.info(f"用户 {username} 登录成功")
+    return s
+
+def login_all_users(users, usernames, passwords, action):
+    """登录所有用户并返回会话缓存"""
+    session_cache = {}
+    
+    for index, user in enumerate(users):
+        username_override = None
+        password_override = None
+        
+        if action:
+            username_list = usernames.split(',')
+            password_list = passwords.split(',')
+            
+            if index < len(username_list):
+                username_override = username_list[index]
+            else:
+                logging.error(f"索引 {index} 的用户名缺失")
+                continue
+                
+            if index < len(password_list):
+                password_override = password_list[index]
+            else:
+                logging.error(f"索引 {index} 的密码缺失")
+                continue
+        
+        # 确定缓存键
+        cache_key = username_override or user["username"]
+        
+        # 登录用户
+        session = login_user(user, username_override, password_override, action)
+        if session:
+            session_cache[cache_key] = session
+    
+    return session_cache
+
+def reserve_user_tasks(session, username, user, current_dayofweek, success_list, start_index):
+    """处理单个用户的所有预约任务"""
+    task_results = []
+    
+    for task_index, task in enumerate(user["tasks"]):
+        global_index = start_index + task_index
+        times = task["time"]
+        roomid = task["roomid"]
+        seatid = task["seatid"]
+        daysofweek = task["daysofweek"]
+        
+        # 确保seatid是列表
+        if isinstance(seatid, str):
+            seatid = [seatid]
+        
+        if current_dayofweek not in daysofweek:
+            logging.info(f"任务 {global_index}: 今天不预约")
+            task_results.append(False)
+            continue
+        
+        if success_list[global_index]:
+            logging.info(f"任务 {global_index} 已成功预约，跳过")
+            task_results.append(True)
+            continue
+            
+        logging.info(f"----------- {username} -- 任务 {global_index}: {times} -- {seatid} 尝试预约 -----------")
+        try:
+            suc = session.submit(times, roomid, seatid, True)
+            task_results.append(suc)
+            if suc:
+                logging.info(f"任务 {global_index} 预约成功!")
+        except Exception as e:
+            logging.error(f"任务 {global_index} 异常: {str(e)}")
+            task_results.append(False)
+    
+    return task_results
+
+def reserve_all_tasks(session_cache, users, current_dayofweek, success_list):
+    """并发预约所有用户的任务"""
+    total_tasks = sum(len(user["tasks"]) for user in users)
+    if not success_list:
         success_list = [False] * total_tasks
         
-    current_dayofweek = get_current_dayofweek(action)
-    session_cache = {}
-    task_index = 0
+    # 计算每个用户的任务起始索引
+    start_indices = []
+    current_index = 0
+    for user in users:
+        start_indices.append(current_index)
+        current_index += len(user["tasks"])
     
-    for index, user in enumerate(users):
-        username = user["username"]
-        password = user["password"]
-        
-        if action:
-            cred_list = usernames.split(',')
-            if index < len(cred_list):
-                username = cred_list[index]
-            else:
-                logging.error(f"Not enough usernames in secrets for index {index}")
-                continue
-            
-            cred_list = passwords.split(',')
-            if index < len(cred_list):
-                password = cred_list[index]
-            else:
-                logging.error(f"Not enough passwords in secrets for index {index}")
-                continue
-            
-        if username not in session_cache:
-            logging.info(f"----------- {username} login -----------")
-            s = reserve(sleep_time=SLEEPTIME, max_attempt=MAX_ATTEMPT, 
-                        enable_slider=ENABLE_SLIDER, reserve_next_day=RESERVE_TOMORROW)
-            s.get_login_status()
-            s.login(username, password)
-            s.requests.headers.update({'Host': 'office.chaoxing.com'})
-            session_cache[username] = s
-        else:
-            s = session_cache[username]
-            
-        for task in user["tasks"]:
-            times = task["time"]
-            roomid = task["roomid"]
-            seatid = task["seatid"]
-            daysofweek = task["daysofweek"]
-            
-            if current_dayofweek not in daysofweek:
-                logging.info(f"Task {task_index}: Today not set to reserve")
-                task_index += 1
+    # 使用线程池并发执行预约
+    futures = []
+    with ThreadPoolExecutor(max_workers=len(session_cache)) as executor:
+        for idx, user in enumerate(users):
+            username = user["username"]
+            session = session_cache.get(username)
+            if not session:
+                logging.warning(f"用户 {username} 无有效会话，跳过")
                 continue
                 
-            if not success_list[task_index]:
-                logging.info(f"----------- {username} -- {times} -- {seatid} try -----------")
-                suc = s.submit(times, roomid, seatid, action)
-                success_list[task_index] = suc
-                
-            task_index += 1
-            
-    return success_list
+            start_index = start_indices[idx]
+            future = executor.submit(
+                reserve_user_tasks,
+                session=session,
+                username=username,
+                user=user,
+                current_dayofweek=current_dayofweek,
+                success_list=success_list,
+                start_index=start_index
+            )
+            futures.append(future)
+    
+    # 收集结果
+    new_success_list = success_list.copy()
+    for future in futures:
+        results = future.result()
+        if results:
+            start_index = start_indices[futures.index(future)]
+            for i, result in enumerate(results):
+                new_success_list[start_index + i] = result
+    
+    return new_success_list
 
-def wait_until(target_time, action):
-    """更严格的等待函数，精确到毫秒级"""
-    logging.info(f"严格等待目标时间: {target_time}")
+def wait_until(target_time):
+    """精确等待到目标时间（北京时间）"""
+    logging.info(f"等待目标时间: {target_time}")
     target_h, target_m, target_s = map(int, target_time.split(':'))
-    target_ts = target_h*3600 + target_m*60 + target_s
+    
+    tz = pytz.timezone('Asia/Shanghai')
     
     while True:
-        current_time = get_current_time(action)
-        current_h, current_m, current_s = map(int, current_time.split(':'))
-        current_ts = current_h*3600 + current_m*60 + current_s
+        now = datetime.datetime.now(tz)
+        current_ts = now.hour * 3600 + now.minute * 60 + now.second
+        
+        target_ts = target_h * 3600 + target_m * 60 + target_s
         
         if current_ts >= target_ts:
-            logging.info(f"精确达到目标时间: {current_time}")
+            logging.info(f"达到目标时间: {now.strftime('%H:%M:%S')}")
             break
             
-        # 更精确的等待，每秒检查10次
-        time.sleep(0.1)
+        # 精确等待
+        time_diff = target_ts - current_ts
+        if time_diff > 1:
+            time.sleep(0.5)
+        else:
+            time.sleep(0.1)
 
 def main(users, action=False):
-    # ... 前面代码保持不变 ...
+    logging.info("程序启动")
     
     if action:
-        logging.info("检测到GitHub Actions模式，执行精确时间控制")
+        logging.info("GitHub Actions 模式 - 启用精确时间控制")
         
-        # 第一步：严格等待到北京时间21:29:00
-        logging.info("严格等待到北京时间09:44:00...")
-        wait_until("09:44:00", action)
-        logging.info("北京时间09:44:00 - 开始登录账号")
+        # 第一步：等待到登录时间
+        login_time = "09:44:00"
+        logging.info(f"等待到登录时间: {login_time}")
+        wait_until(login_time)
         
-        # 获取环境变量中的账号密码
+        # 获取凭证
         usernames, passwords = get_user_credentials(action)
         
-        # 登录账号
+        # 登录所有用户
         logging.info("开始账号登录流程")
-        success_list = login_and_reserve(users, usernames, passwords, action, None)
-        logging.info("账号登录完成")
+        session_cache = login_all_users(users, usernames, passwords, action)
+        logging.info(f"登录完成，共 {len(session_cache)} 个用户登录成功")
         
-        # 第二步：严格等待到北京时间21:30:00
-        logging.info("严格等待到北京时间09:45:00...")
-        wait_until("09:45:00", action)
-        logging.info("北京时间09:45:00 - 开始预约流程")
-        attempt_times = 0
-        usernames, passwords = None, None
-        if action:
-            usernames, passwords = get_user_credentials(action)
+        # 第二步：等待到预约时间
+        reserve_time = "09:45:00"
+        logging.info(f"等待到预约时间: {reserve_time}")
+        wait_until(reserve_time)
+        logging.info("开始预约流程")
         
-    total_tasks = sum(len(user["tasks"]) for user in users)
-    success_list = None
-    
-    while current_time < ENDTIME:
-        attempt_times += 1
-        success_list = login_and_reserve(users, usernames, passwords, action, success_list)
-        print(f"attempt time {attempt_times}, time now {current_time}, success list {success_list}")
-        current_time = get_current_time(action)
+        current_dayofweek = get_current_dayofweek(action)
+        success_list = None
+        total_tasks = sum(len(user["tasks"]) for user in users)
+        attempt_count = 0
         
-        if sum(success_list) == total_tasks:
-            print(f"All tasks reserved successfully!")
-            return
+        while True:
+            attempt_count += 1
+            current_time = get_current_time(action)
+            
+            # 检查是否超过结束时间
+            if current_time >= ENDTIME:
+                logging.info(f"已超过结束时间 {ENDTIME}，停止尝试")
+                break
+                
+            # 并发预约所有任务
+            success_list = reserve_all_tasks(
+                session_cache=session_cache,
+                users=users,
+                current_dayofweek=current_dayofweek,
+                success_list=success_list
+            )
+            
+            # 检查是否所有任务都已完成
+            if all(success_list):
+                logging.info(f"所有任务预约成功! 共尝试 {attempt_count} 次")
+                return
+                
+            # 检查最大尝试次数
+            if attempt_count >= MAX_ATTEMPT:
+                logging.info(f"达到最大尝试次数 {MAX_ATTEMPT}")
+                break
+                
+            # 等待后重试
+            logging.info(f"部分任务未成功，等待 {SLEEPTIME} 秒后重试...")
+            time.sleep(SLEEPTIME)
+    else:
+        # 非GitHub Actions模式 - 立即执行
+        logging.info("本地模式 - 立即执行")
+        usernames, passwords = "", ""
+        session_cache = login_all_users(users, usernames, passwords, action)
+        current_dayofweek = get_current_dayofweek(action)
+        success_list = reserve_all_tasks(session_cache, users, current_dayofweek, None)
+        logging.info(f"预约结果: {success_list}")
 
 def debug(users, action=False):
-    # 修复日志输出中的变量名
-    logging.info(f"Global settings: \nSLEEPTIME: {SLEEPTIME}\nENDTIME: {ENDTIME}\nENABLE_SLIDER: {ENABLE_SLIDER}\nRESERVE_TOMORROW: {RESERVE_TOMORROW}")
-    logging.info(f" Debug Mode start! , action {'on' if action else 'off'}")
+    logging.info(f"调试模式启动")
+    logging.info(f"全局设置: SLEEPTIME={SLEEPTIME}, ENDTIME={ENDTIME}, ENABLE_SLIDER={ENABLE_SLIDER}, RESERVE_TOMORROW={RESERVE_TOMORROW}")
     
+    usernames, passwords = "", ""
     if action:
         usernames, passwords = get_user_credentials(action)
     
+    session_cache = login_all_users(users, usernames, passwords, action)
     current_dayofweek = get_current_dayofweek(action)
-    session_cache = {}
     
-    for index, user in enumerate(users):
-        username = user["username"]
-        password = user["password"]
-        
-        if action:
-            cred_list = usernames.split(',')
-            if index < len(cred_list):
-                username = cred_list[index]
-            else:
-                logging.error(f"Not enough usernames in secrets for index {index}")
-                continue
+    for username, session in session_cache.items():
+        user = next((u for u in users if u["username"] == username), None)
+        if not user:
+            continue
             
-            cred_list = passwords.split(',')
-            if index < len(cred_list):
-                password = cred_list[index]
-            else:
-                logging.error(f"Not enough passwords in secrets for index {index}")
-                continue
-        
-        if username not in session_cache:
-            logging.info(f"----------- {username} login -----------")
-            s = reserve(sleep_time=SLEEPTIME, max_attempt=MAX_ATTEMPT, 
-                        enable_slider=ENABLE_SLIDER, reserve_next_day=RESERVE_TOMORROW)
-            s.get_login_status()
-            s.login(username, password)
-            s.requests.headers.update({'Host': 'office.chaoxing.com'})
-            session_cache[username] = s
-        else:
-            s = session_cache[username]
-        
         for task_index, task in enumerate(user["tasks"]):
             times = task["time"]
             roomid = task["roomid"]
             seatid = task["seatid"]
             daysofweek = task["daysofweek"]
             
-            if type(seatid) == str:
+            if isinstance(seatid, str):
                 seatid = [seatid]
             
             if current_dayofweek not in daysofweek:
-                logging.info(f"Task {task_index}: Today not set to reserve")
+                logging.info(f"任务 {task_index}: 今天不预约")
                 continue
             
-            logging.info(f"----------- {username} -- Task {task_index+1}: {times} -- {seatid} try -----------")
-            suc = s.submit(times, roomid, seatid, action)
-            if suc:
-                logging.info(f"Task {task_index+1} reserved successfully!")
+            logging.info(f"----------- {username} -- 任务 {task_index+1}: {times} -- {seatid} 尝试 -----------")
+            try:
+                suc = session.submit(times, roomid, seatid, action)
+                if suc:
+                    logging.info(f"任务 {task_index+1} 预约成功!")
+                else:
+                    logging.warning(f"任务 {task_index+1} 预约失败")
+            except Exception as e:
+                logging.error(f"任务 {task_index+1} 异常: {str(e)}")
 
 def get_roomid(args1, args2):
-    username = input("请输入用户名：")
-    password = input("请输入密码：")
+    username = input("用户名：")
+    password = input("密码：")
     s = reserve(sleep_time=SLEEPTIME, max_attempt=MAX_ATTEMPT, enable_slider=ENABLE_SLIDER, reserve_next_day=RESERVE_TOMORROW)
     s.get_login_status()
-    s.login(username=username, password=password)
+    login_result = s.login(username=username, password=password)
+    if not login_result[0]:
+        print(f"登录失败: {login_result[1]}")
+        return
     s.requests.headers.update({'Host': 'office.chaoxing.com'})
-    encode = input("请输入deptldEnc：")
+    encode = input("deptldEnc：")
     s.roomid(encode)
 
 if __name__ == "__main__":
     config_path = os.path.join(os.path.dirname(__file__), 'config.json')
-    parser = argparse.ArgumentParser(prog='Chao Xing seat auto reserve')
-    parser.add_argument('-u','--user', default=config_path, help='user config file')
-    parser.add_argument('-m','--method', default="reserve" ,choices=["reserve", "debug", "room"], help='for debug')
-    parser.add_argument('-a','--action', action="store_true",help='use --action to enable in github action')
+    parser = argparse.ArgumentParser(prog='超星座位自动预约')
+    parser.add_argument('-u','--user', default=config_path, help='用户配置文件')
+    parser.add_argument('-m','--method', default="reserve" ,choices=["reserve", "debug", "room"], help='运行模式')
+    parser.add_argument('-a','--action', action="store_true", help='启用GitHub Actions模式')
     args = parser.parse_args()
-    func_dict = {"reserve": main, "debug":debug, "room": get_roomid}
-    with open(args.user, "r+") as data:
-        usersdata = json.load(data)["reserve"]
+    
+    func_dict = {
+        "reserve": main,
+        "debug": debug,
+        "room": get_roomid
+    }
+    
+    try:
+        with open(args.user, "r") as data:
+            config = json.load(data)
+            usersdata = config.get("reserve", [])
+            logging.info(f"加载 {len(usersdata)} 个用户配置")
+    except Exception as e:
+        logging.error(f"配置文件加载失败: {str(e)}")
+        exit(1)
+    
     func_dict[args.method](usersdata, args.action)
