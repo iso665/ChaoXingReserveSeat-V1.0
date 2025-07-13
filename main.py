@@ -13,7 +13,7 @@ get_current_dayofweek = lambda action: time.strftime("%A", time.localtime(time.t
 SLEEPTIME = 0.2
 ENDTIME = "21:31:00"
 ENABLE_SLIDER = True
-MAX_ATTEMPT = 2
+MAX_ATTEMPT = 1
 RESERVE_TOMORROW = True  # 使用正确的变量名
 
 def get_user_credentials(action):
