@@ -27,6 +27,53 @@ def get_user_credentials(action):
             return "", ""
     return "", ""
 
+def login_user(user_config, username_override, password_override, action):
+    """处理单个用户的登录"""
+    username = user_config["username"]
+    password = user_config["password"]
+    
+    # 使用覆盖的凭据（如果提供了）
+    if action and username_override:
+        username = username_override
+    if action and password_override:
+        password = password_override
+        
+    logging.info(f"----------- {username} login -----------")
+    s = reserve(
+        sleep_time=SLEEPTIME,
+        max_attempt=MAX_ATTEMPT,
+        enable_slider=ENABLE_SLIDER,
+        reserve_next_day=RESERVE_TOMORROW
+    )
+    s.get_login_status()
+    s.login(username, password)
+    s.requests.headers.update({'Host': 'office.chaoxing.com'})
+    return s
+
+# 新增的预约函数
+def reserve_seats(session, username, tasks, action, current_dayofweek, success_list, task_index):
+    """处理单个用户的预约任务"""
+    for task in tasks:
+        times = task["time"]
+        roomid = task["roomid"]
+        seatid = task["seatid"]
+        daysofweek = task["daysofweek"]
+        
+        if current_dayofweek not in daysofweek:
+            logging.info(f"Task {task_index}: Today not set to reserve")
+            task_index += 1
+            continue
+            
+        if not success_list[task_index]:
+            logging.info(f"----------- {username} -- {times} -- {seatid} try -----------")
+            suc = session.submit(times, roomid, seatid, action)
+            success_list[task_index] = suc
+            
+        task_index += 1
+        
+    return task_index, success_list
+
+# 重构后的主函数
 def login_and_reserve(users, usernames, passwords, action, success_list=None):
     # 修复日志输出中的变量名
     logging.info(f"Global settings: \nSLEEPTIME: {SLEEPTIME}\nENDTIME: {ENDTIME}\nENABLE_SLIDER: {ENABLE_SLIDER}\nRESERVE_TOMORROW: {RESERVE_TOMORROW}")
@@ -42,52 +89,44 @@ def login_and_reserve(users, usernames, passwords, action, success_list=None):
     task_index = 0
     
     for index, user in enumerate(users):
-        username = user["username"]
-        password = user["password"]
-        
+        # 准备凭证覆盖
+        username_override = None
+        password_override = None
         if action:
             cred_list = usernames.split(',')
             if index < len(cred_list):
-                username = cred_list[index]
+                username_override = cred_list[index]
             else:
                 logging.error(f"Not enough usernames in secrets for index {index}")
                 continue
             
             cred_list = passwords.split(',')
             if index < len(cred_list):
-                password = cred_list[index]
+                password_override = cred_list[index]
             else:
                 logging.error(f"Not enough passwords in secrets for index {index}")
                 continue
-            
-        if username not in session_cache:
-            logging.info(f"----------- {username} login -----------")
-            s = reserve(sleep_time=SLEEPTIME, max_attempt=MAX_ATTEMPT, 
-                        enable_slider=ENABLE_SLIDER, reserve_next_day=RESERVE_TOMORROW)
-            s.get_login_status()
-            s.login(username, password)
-            s.requests.headers.update({'Host': 'office.chaoxing.com'})
-            session_cache[username] = s
+        
+        # 确定缓存键（使用覆盖的用户名或配置中的用户名）
+        cache_username = username_override if username_override else user["username"]
+        
+        # 登录或从缓存获取会话
+        if cache_username not in session_cache:
+            session = login_user(user, username_override, password_override, action)
+            session_cache[cache_username] = session
         else:
-            s = session_cache[username]
+            session = session_cache[cache_username]
             
-        for task in user["tasks"]:
-            times = task["time"]
-            roomid = task["roomid"]
-            seatid = task["seatid"]
-            daysofweek = task["daysofweek"]
-            
-            if current_dayofweek not in daysofweek:
-                logging.info(f"Task {task_index}: Today not set to reserve")
-                task_index += 1
-                continue
-                
-            if not success_list[task_index]:
-                logging.info(f"----------- {username} -- {times} -- {seatid} try -----------")
-                suc = s.submit(times, roomid, seatid, action)
-                success_list[task_index] = suc
-                
-            task_index += 1
+        # 预约该用户的任务
+        task_index, success_list = reserve_seats(
+            session=session,
+            username=cache_username,
+            tasks=user["tasks"],
+            action=action,
+            current_dayofweek=current_dayofweek,
+            success_list=success_list,
+            task_index=task_index
+        )
             
     return success_list
 
@@ -168,29 +207,29 @@ def debug(users, action=False):
         if action:
             cred_list = usernames.split(',')
             if index < len(cred_list):
-                username = cred_list[index]
+                username_override = cred_list[index]
             else:
                 logging.error(f"Not enough usernames in secrets for index {index}")
                 continue
             
             cred_list = passwords.split(',')
             if index < len(cred_list):
-                password = cred_list[index]
+                password_override = cred_list[index]
             else:
                 logging.error(f"Not enough passwords in secrets for index {index}")
                 continue
-        
-        if username not in session_cache:
-            logging.info(f"----------- {username} login -----------")
-            s = reserve(sleep_time=SLEEPTIME, max_attempt=MAX_ATTEMPT, 
-                        enable_slider=ENABLE_SLIDER, reserve_next_day=RESERVE_TOMORROW)
-            s.get_login_status()
-            s.login(username, password)
-            s.requests.headers.update({'Host': 'office.chaoxing.com'})
-            session_cache[username] = s
         else:
-            s = session_cache[username]
+            username_override = None
+            password_override = None
+            
+        cache_username = username_override if action and username_override else username
         
+        if cache_username not in session_cache:
+            session = login_user(user, username_override, password_override, action)
+            session_cache[cache_username] = session
+        else:
+            session = session_cache[cache_username]
+            
         for task_index, task in enumerate(user["tasks"]):
             times = task["time"]
             roomid = task["roomid"]
@@ -204,11 +243,10 @@ def debug(users, action=False):
                 logging.info(f"Task {task_index}: Today not set to reserve")
                 continue
             
-            logging.info(f"----------- {username} -- Task {task_index+1}: {times} -- {seatid} try -----------")
-            suc = s.submit(times, roomid, seatid, action)
+            logging.info(f"----------- {cache_username} -- Task {task_index+1}: {times} -- {seatid} try -----------")
+            suc = session.submit(times, roomid, seatid, action)
             if suc:
                 logging.info(f"Task {task_index+1} reserved successfully!")
-
 def get_roomid(args1, args2):
     username = input("请输入用户名：")
     password = input("请输入密码：")
