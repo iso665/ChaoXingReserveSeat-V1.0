@@ -434,10 +434,10 @@ class reserve:
         
         # 并行处理每个座位
         def process_seat(seat):
-            # 清理可能重复的cookies
-            self.requests.cookies.clear_expired_cookies()
-            if 'JSESSIONID' in self.requests.cookies:
-                del self.requests.cookies['JSESSIONID']
+            # 检查会话有效性 - 在每次尝试前检查
+            if not self.requests.cookies.get("JSESSIONID"):
+                logging.warning("会话已过期，需要重新登录")
+                return False
             
             logging.info(f"尝试预约座位: {seat}")
             suc = False
