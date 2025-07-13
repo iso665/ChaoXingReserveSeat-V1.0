@@ -22,7 +22,7 @@ class reserve:
         self.login_url = "https://passport2.chaoxing.com/fanyalogin"
         self.token = ""
         self.requests = requests.session()
-        self.token_pattern = re.compile("token = '(.*?)'")
+        self.token_pattern = re.compile("token\s*=\s*['\"](.*?)['\"]")
         
         # 请求头设置
         self.headers = {
