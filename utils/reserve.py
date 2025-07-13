@@ -304,7 +304,19 @@ class reserve:
                 "b": "a"
             }
             
-            response = self.requests.get(url=url, params=params, headers=self.headers, timeout=15)
+            # 添加Referer头防止404错误
+            headers_with_referer = {
+                **self.headers,
+                "Referer": "https://office.chaoxing.com/"
+            }
+            
+            response = self.requests.get(
+                url=url, 
+                params=params, 
+                headers=headers_with_referer,
+                timeout=15
+            )
+            
             if response.status_code != 200:
                 logging.error(f"获取验证码数据失败，状态码: {response.status_code}")
                 return "", "", ""
@@ -328,6 +340,9 @@ class reserve:
             image_data = data.get("imageVerificationVo", {})
             bg = image_data.get("shadeImage", "")
             tp = image_data.get("cutoutImage", "")
+            
+            # 记录获取的URL用于调试
+            logging.debug(f"获取验证码数据: bg={bg}, tp={tp}")
             
             return captcha_token, bg, tp
         except Exception as e:
@@ -379,11 +394,22 @@ class reserve:
 
     def submit(self, times, roomid, seatid, action):
         """提交预约请求"""
+        # 时间格式化函数
+        def format_time(t):
+            parts = t.split(':')
+            if len(parts) == 2:  # 只有小时和分钟
+                return f"{t}:00"
+            return t
+        
+        # 格式化时间
+        start_time = format_time(times[0])
+        end_time = format_time(times[1])
+        
         if not isinstance(seatid, list):
             seatid = [seatid]  # 确保seatid是列表
         
         day_str = self.get_target_date()
-        logging.info(f"预约日期: {day_str}, 时段: {times[0]}-{times[1]}")
+        logging.info(f"预约日期: {day_str}, 时段: {start_time}-{end_time}")
         
         results = []  # 存储每个座位的预约结果
         
@@ -399,7 +425,7 @@ class reserve:
                 # 获取token - 增强重试逻辑
                 token_retry = 0
                 token = ""
-                while token_retry < 5 and not token:  # 增加到5次重试
+                while token_retry < 5 and not token:
                     token = self._get_page_token(self.url.format(roomid, seat))
                     if token == "SESSION_EXPIRED":
                         logging.critical("会话过期，无法继续预约")
@@ -407,8 +433,7 @@ class reserve:
                     if not token:
                         logging.warning(f"获取token失败，重试中... ({token_retry+1}/5)")
                         token_retry += 1
-                        # 随机等待1-2秒，避免固定间隔
-                        time.sleep(1 + random.uniform(0, 1))
+                        time.sleep(1 + random.uniform(0, 1))  # 随机等待1-2秒
                 
                 if not token:
                     logging.error("无法获取有效token，跳过此座位")
@@ -424,8 +449,8 @@ class reserve:
                 # 准备请求参数
                 parm = {
                     "roomId": roomid,
-                    "startTime": times[0],
-                    "endTime": times[1],
+                    "startTime": start_time,  # 使用格式化后的时间
+                    "endTime": end_time,      # 使用格式化后的时间
                     "day": day_str,
                     "seatNum": seat,
                     "captcha": captcha,
