@@ -75,15 +75,7 @@ class reserve:
         """获取正确的目标预约日期（北京时间）"""
         now = datetime.datetime.now(self.beijing_tz)
     
-        # 明确区分当日预约和次日预约
-        if self.reserve_next_day:
-            # 如果是晚上10点后，预约后天座位
-            if now.hour >= 22:
-                target_date = now + datetime.timedelta(days=2)
-            else:
-                target_date = now + datetime.timedelta(days=1)
-        else:
-            target_date = now
+
     
         return target_date.strftime("%Y-%m-%d")
     
