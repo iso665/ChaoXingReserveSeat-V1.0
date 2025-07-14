@@ -306,11 +306,11 @@ class reserve:
             logging.error(f"验证码处理异常: {str(e)}")
             return ""
 
-
     def get_slide_captcha_data(self, roomid, seatid):
-        """获取滑块验证码数据"""
-        # 直接使用固定URL避免动态生成错误
+        """获取滑块验证码数据 - 新版API"""
         url = "https://captcha.chaoxing.com/captcha/get/verification/image"
+    
+        # 使用更简单的参数结构
         params = {
             "captchaId": "42sxgHoTPTKbt0uZxPJ7ssOvtXr3ZgZ1",
             "type": "slide",
@@ -319,16 +319,25 @@ class reserve:
     
         try:
             response = self.requests.get(url, params=params, headers=self.headers)
+            if response.status_code != 200:
+                logging.error(f"验证码请求失败，状态码: {response.status_code}")
+                return None, None, None
+            
             data = response.json()
         
-            # 直接返回图片URL而非通过JSONP解析
+            # 新版API直接返回JSON
             captcha_token = data.get("token")
-            bg = data.get("imageVerificationVo", {}).get("shadeImage")
-            tp = data.get("imageVerificationVo", {}).get("cutoutImage")
+            image_vo = data.get("imageVerificationVo", {})
+            bg = image_vo.get("shadeImage")
+            tp = image_vo.get("cutoutImage")
         
+            if not all([captcha_token, bg, tp]):
+                logging.error("验证码数据不完整")
+                return None, None, None
+            
             return captcha_token, bg, tp
         except Exception as e:
-            logging.error(f"验证码数据获取失败: {str(e)}")
+            logging.error(f"验证码数据获取异常: {str(e)}")
             return None, None, None
 
     def calculate_slide_distance(self, bg, tp):
