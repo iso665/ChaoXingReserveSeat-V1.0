@@ -31,13 +31,11 @@ class reserve:
            })
         
         # 增强token提取模式
-       self.token_patterns = [
-           re.compile(r"token\s*[=:]\s*['\"]([a-f0-9]{32})['\"]", re.IGNORECASE),
-           re.compile(r'<input[^>]*name="token"[^>]*value="([a-f0-9]{32})"', re.IGNORECASE),
-           re.compile(r'<meta[^>]*name="token"[^>]*content="([a-f0-9]{32})"', re.IGNORECASE),
-           re.compile(r"window\.token\s*=\s*'([a-f0-9]{32})'", re.IGNORECASE),
-           re.compile(r"var\s+token\s*=\s*'([a-f0-9]{32})'", re.IGNORECASE)
-       ]
+        self.token_patterns = [
+            re.compile("token\s*=\s*['\"](.*?)['\"]"),  # 原始模式
+            re.compile("token\s*:\s*['\"](.*?)['\"]"),  # JS变量模式
+            re.compile('<meta\s+name="token"\s+content="(.*?)"')  # meta标签模式
+        ]
         
         # 请求头设置 - 添加更多浏览器特征
         self.headers = {
