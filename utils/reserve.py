@@ -74,7 +74,13 @@ class reserve:
     def get_target_date(self):
         """获取正确的目标预约日期（北京时间）"""
         now = datetime.datetime.now(self.beijing_tz)
-    
+        # 根据reserve_next_day计算目标日期
+        if self.reserve_next_day:
+            # 预约明天
+            target_date = now + datetime.timedelta(days=1)
+        else:
+            # 预约今天
+            target_date = now        
 
     
         return target_date.strftime("%Y-%m-%d")
