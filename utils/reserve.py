@@ -71,17 +71,20 @@ class reserve:
         self._cached_captcha = None
         self._last_captcha_time = 0
 
-
     def get_target_date(self):
         """获取正确的目标预约日期（北京时间）"""
         now = datetime.datetime.now(self.beijing_tz)
-        
-        # 根据reserve_next_day计算目标日期
+    
+        # 明确区分当日预约和次日预约
         if self.reserve_next_day:
-            target_date = now + datetime.timedelta(days=1)
+            # 如果是晚上10点后，预约后天座位
+            if now.hour >= 22:
+                target_date = now + datetime.timedelta(days=2)
+            else:
+                target_date = now + datetime.timedelta(days=1)
         else:
             target_date = now
-        
+    
         return target_date.strftime("%Y-%m-%d")
     
     def _get_page_token(self, url):
@@ -306,45 +309,26 @@ class reserve:
 
     def get_slide_captcha_data(self, roomid, seatid):
         """获取滑块验证码数据"""
+        # 直接使用固定URL避免动态生成错误
         url = "https://captcha.chaoxing.com/captcha/get/verification/image"
-        timestamp = int(time.time() * 1000)
-        capture_key, token = generate_captcha_key(timestamp)
-        
-        # 动态生成referer
-        referer = f"https://office.chaoxing.com/front/third/apps/seat/code?id={roomid}&seatNum={seatid}"
-        
-        # 动态生成callback
-        callback_name = f"jQuery{random.randint(100000000000,999999999999)}_{int(time.time()*1000)}"
-        
         params = {
-            "callback": callback_name,
             "captchaId": "42sxgHoTPTKbt0uZxPJ7ssOvtXr3ZgZ1",
             "type": "slide",
-            "version": "1.1.18",
-            "captchaKey": capture_key,
-            "token": token,
-            "referer": referer,
-            "_": timestamp
+            "version": "1.1.18"
         }
-        
-        response = self.requests.get(url=url, params=params, headers=self.headers)
-        
-        # 处理JSONP响应
-        if response.text.startswith(callback_name + "("):
-            json_str = response.text[len(callback_name)+1:-1]
-        else:
-            # 尝试直接解析
-            json_str = response.text
-        
+    
         try:
-            data = json.loads(json_str)
-            captcha_token = data["token"]
-            bg = data["imageVerificationVo"]["shadeImage"]
-            tp = data["imageVerificationVo"]["cutoutImage"]
+            response = self.requests.get(url, params=params, headers=self.headers)
+            data = response.json()
+        
+            # 直接返回图片URL而非通过JSONP解析
+            captcha_token = data.get("token")
+            bg = data.get("imageVerificationVo", {}).get("shadeImage")
+            tp = data.get("imageVerificationVo", {}).get("cutoutImage")
+        
             return captcha_token, bg, tp
         except Exception as e:
-            logging.error(f"验证码数据解析失败: {str(e)}")
-            logging.debug(f"验证码响应内容: {response.text[:500]}")
+            logging.error(f"验证码数据获取失败: {str(e)}")
             return None, None, None
 
     def calculate_slide_distance(self, bg, tp):
