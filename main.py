@@ -38,7 +38,7 @@ def wait_until(target_time):
 # 全局配置
 SLEEPTIME = 0.1  # 减少等待时间
 ENDTIME = "21:31:00"
-ENABLE_SLIDER = False
+ENABLE_SLIDER = True
 MAX_ATTEMPT = 3  # 减少尝试次数
 RESERVE_TOMORROW = True
 
