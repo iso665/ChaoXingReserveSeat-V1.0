@@ -37,7 +37,7 @@ class reserve:
            re.compile(r'<meta[^>]*name="token"[^>]*content="([a-f0-9]{32})"', re.IGNORECASE),
            re.compile(r"window\.token\s*=\s*'([a-f0-9]{32})'", re.IGNORECASE),
            re.compile(r"var\s+token\s*=\s*'([a-f0-9]{32})'", re.IGNORECASE)
-           ]
+       ]
         
         # 请求头设置 - 添加更多浏览器特征
         self.headers = {
