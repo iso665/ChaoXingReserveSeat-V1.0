@@ -2,15 +2,15 @@ name: auto_Reserve
 
 on:
   schedule:
-    # 北京时间20:30运行 (UTC+8)
-    - cron: "30 07 * * *"   # UTC时间12:30 = 北京时间20:30
+    # 北京时间19:00运行 (UTC+8)
+    - cron: "00 11 * * *"   # UTC时间12:30 = 北京时间20:30
       timezone: "Asia/Shanghai"
   workflow_dispatch:  # 保留手动触发功能
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 120  # 设置2小时超时防止意外终止
+    timeout-minutes: 180  # 设置3小时超时防止意外终止
     steps:
       - uses: actions/checkout@v2
   
