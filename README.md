@@ -79,20 +79,55 @@ xxxxxxx,xxxxxxx
 ```json
 {
     "reserve": [
-        {"username": "XXXXXXXX", //https://passport2.chaoxing.com/mlogin?loginType=1&newversion=true&fid=&  在这个网站查看是否可以顺利登陆 
-        "password": "XXXXXXXX",
-        "time": ["08:00","22:00"], // 预约的起始时间
-        "roomid":"2609", //2609:四楼外圈,5483:四楼内圈,2610:五楼外圈,5484:五楼内圈
-        "seatid":"002", // 注意要用0补全至3位数，例如6号座位应该填006
-        "daysofweek": ["Monday" , "Tuesday", "Wednesday", "Thursday", "Friday"]
+        {
+            "username": "用户1账号",
+            "password": "用户1密码",
+            "tasks": [
+                {
+                    "time": ["08:00", "12:30"],
+                    "roomid": "8215",
+                    "seatid": ["137"],
+                    "daysofweek": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday","Saturday" , "Sunday"]
+                },
+                {
+                    "time": ["14:30", "18:00"],
+                    "roomid": "8215",
+                    "seatid": ["137"],
+                    "daysofweek": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday","Saturday" , "Sunday"]
+                },
+                {
+                    "time": ["18:30", "22:00"],
+                    "roomid": "8215",
+                    "seatid": ["137"],
+                    "daysofweek": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday","Saturday" , "Sunday"]
+                }
+            ]
         },
-        {"username": "xxxxxxxxxx",
-        "password": "xxxxxxxxx",
-        "time": ["20:00","21:00"],
-        "roomid":"5483",
-        "seatid":["056"],
-        "daysofweek": ["Saturday" , "Sunday"]
-    }
+        {
+            "username": "用户2账号",
+            "password": "用户2密码",
+            "tasks": [
+                {
+                    "time": ["08:00", "12:30"],
+                    "roomid": "8215",
+                    "seatid": ["099"],
+                    "daysofweek": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday","Saturday" , "Sunday"]
+                },
+                {
+                    "time": ["13:00", "18:00"],
+                    "roomid": "8215",
+                    "seatid": ["099"],
+                    "daysofweek": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday","Saturday" , "Sunday"]
+                },
+                {
+                    "time": ["18:30", "22:00"],
+                    "roomid": "8215",
+                    "seatid": ["099"],
+                    "daysofweek": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday","Saturday" , "Sunday"]
+                }
+            ]
+        }
+    ]
 }
 ```
 参考前面的运行方式即可。
