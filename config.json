@@ -23,30 +23,7 @@
                     "daysofweek": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday","Saturday" , "Sunday"]
                 }
             ]
-        },
-        {
-            "username": "用户2账号",
-            "password": "用户2密码",
-            "tasks": [
-                {
-                    "time": ["08:00", "12:30"],
-                    "roomid": "8215",
-                    "seatid": ["099"],
-                    "daysofweek": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday","Saturday" , "Sunday"]
-                },
-                {
-                    "time": ["13:00", "18:00"],
-                    "roomid": "8215",
-                    "seatid": ["099"],
-                    "daysofweek": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday","Saturday" , "Sunday"]
-                },
-                {
-                    "time": ["18:30", "22:00"],
-                    "roomid": "8215",
-                    "seatid": ["099"],
-                    "daysofweek": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday","Saturday" , "Sunday"]
-                }
-            ]
         }
+        
     ]
 }
