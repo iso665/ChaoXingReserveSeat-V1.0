@@ -1,10 +1,7 @@
 name: auto_Reserve
 
 on:
-  schedule:
-    # 北京时间19:00运行 (UTC+8)
-    - cron: "00 11 * * *"   # UTC时间12:30 = 北京时间20:30
-      timezone: "Asia/Shanghai"
+
   workflow_dispatch:  # 保留手动触发功能
 
 jobs:
