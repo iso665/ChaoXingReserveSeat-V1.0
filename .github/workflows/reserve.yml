@@ -9,7 +9,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-20.04
     timeout-minutes: 180  # 设置3小时超时防止意外终止
     steps:
       - uses: actions/checkout@v2
