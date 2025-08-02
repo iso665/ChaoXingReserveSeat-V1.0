@@ -9,7 +9,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-from utils import reserve
+from utils import reserve, get_user_credentials
 
 # 修复时间处理函数 - 使用pytz正确处理时区
 def get_current_time(action):
@@ -41,18 +41,6 @@ ENDTIME = "22:01:00"
 ENABLE_SLIDER = False
 MAX_ATTEMPT = 3  # 减少尝试次数
 RESERVE_TOMORROW = True
-
-def get_user_credentials(action):
-    """从环境变量获取凭证"""
-    if action:
-        try:
-            usernames = os.environ['USERNAMES']
-            passwords = os.environ['PASSWORDS']
-            return usernames, passwords
-        except KeyError:
-            logging.error("Missing USERNAMES or PASSWORDS in environment variables")
-            return "", ""
-    return "", ""
 
 def login_user(user_config, username_override, password_override, action):
     """处理单个用户的登录"""
@@ -96,11 +84,11 @@ def login_user(user_config, username_override, password_override, action):
     
     return s
 
-
 def login_all_users(users, usernames, passwords, action):
     """登录所有用户并返回会话缓存"""
     session_cache = {}
     
+    # 处理旧格式配置（直接用户列表）和新格式配置（带tasks的用户）
     for index, user in enumerate(users):
         username_override = None
         password_override = None
@@ -120,14 +108,26 @@ def login_all_users(users, usernames, passwords, action):
                 logging.error(f"索引 {index} 的密码缺失")
                 continue
         
+        # 兼容旧格式配置
+        if "tasks" not in user:
+            # 旧格式：直接包含预约信息
+            user_config = {
+                "username": user.get("username", ""),
+                "password": user.get("password", ""),
+                "tasks": [user]  # 将整个用户配置作为单个任务
+            }
+        else:
+            # 新格式：包含tasks数组
+            user_config = user
+        
         # 登录用户
-        session = login_user(user, username_override, password_override, action)
+        session = login_user(user_config, username_override, password_override, action)
         if session:
             # 使用手机号作为缓存键
-            cache_key = username_override if action else user["username"]
+            cache_key = username_override if action else user_config["username"]
             session_cache[cache_key] = {
                 "session": session,
-                "config_username": user["username"]  # 保存配置中的用户名
+                "config_username": user_config["username"]  # 保存配置中的用户名
             }
     
     return session_cache
@@ -146,10 +146,11 @@ def process_single_task(session, task, username, global_index, current_dayofweek
             logging.info("重新登录成功")
             session.requests.headers.update({'Host': 'office.chaoxing.com'})
     
-    times = task["time"]
-    roomid = task["roomid"]
-    seatid = task["seatid"]
-    daysofweek = task["daysofweek"]
+    # 兼容旧格式和新格式
+    times = task.get("time", task.get("times", []))
+    roomid = task.get("roomid", task.get("roomId", ""))
+    seatid = task.get("seatid", task.get("seatId", []))
+    daysofweek = task.get("daysofweek", task.get("daysOfWeek", []))
     
     if isinstance(seatid, str):
         seatid = [seatid]
@@ -164,7 +165,7 @@ def process_single_task(session, task, username, global_index, current_dayofweek
         
     logging.info(f"----------- {username} -- 任务 {global_index}: {times} -- {seatid} 尝试预约 -----------")
     try:
-        suc = session.submit(times, roomid, seatid, True)
+        suc = session.submit(times, roomid, seatid, action)
         if suc:
             logging.info(f"任务 {global_index} 预约成功!")
         return suc
@@ -176,12 +177,19 @@ def process_single_task(session, task, username, global_index, current_dayofweek
 def process_user_tasks(session, user, current_dayofweek, success_list, start_index):
     """并行处理单个用户的所有预约任务"""
     task_results = []
-    username = user["username"]
+    username = user.get("username", "")
+    
+    # 获取用户的任务列表
+    if "tasks" in user:
+        tasks = user["tasks"]
+    else:
+        # 兼容旧格式：整个用户配置就是一个任务
+        tasks = [user]
     
     # 使用线程池处理用户的所有任务
-    with ThreadPoolExecutor(max_workers=len(user["tasks"])) as executor:
+    with ThreadPoolExecutor(max_workers=len(tasks)) as executor:
         futures = []
-        for task_index, task in enumerate(user["tasks"]):
+        for task_index, task in enumerate(tasks):
             global_index = start_index + task_index
             futures.append(executor.submit(
                 process_single_task,
@@ -190,7 +198,7 @@ def process_user_tasks(session, user, current_dayofweek, success_list, start_ind
                 username=username,
                 global_index=global_index,
                 current_dayofweek=current_dayofweek,
-                is_success=success_list[global_index]
+                is_success=success_list[global_index] if global_index < len(success_list) else False
             ))
         
         # 收集结果 - 确保按原始顺序收集
@@ -200,7 +208,14 @@ def process_user_tasks(session, user, current_dayofweek, success_list, start_ind
 
 def reserve_all_tasks(session_cache, users, current_dayofweek, success_list):
     """并发预约所有用户的任务"""
-    total_tasks = sum(len(user["tasks"]) for user in users)
+    # 计算总任务数（兼容新旧格式）
+    total_tasks = 0
+    for user in users:
+        if "tasks" in user:
+            total_tasks += len(user["tasks"])
+        else:
+            total_tasks += 1  # 旧格式每个用户是一个任务
+    
     if not success_list:
         success_list = [False] * total_tasks
         
@@ -209,13 +224,16 @@ def reserve_all_tasks(session_cache, users, current_dayofweek, success_list):
     current_index = 0
     for user in users:
         start_indices.append(current_index)
-        current_index += len(user["tasks"])
+        if "tasks" in user:
+            current_index += len(user["tasks"])
+        else:
+            current_index += 1
     
     # 使用线程池并发执行预约
     futures = []
     with ThreadPoolExecutor(max_workers=min(len(session_cache), 4)) as executor:  # 限制并发线程数
         for idx, user in enumerate(users):
-            username = user["username"]
+            username = user.get("username", "")
             
             # 查找会话 - 优先尝试使用配置用户名
             session_info = None
@@ -228,7 +246,8 @@ def reserve_all_tasks(session_cache, users, current_dayofweek, success_list):
                 logging.warning(f"用户 {username} 无有效会话，跳过")
                 # 标记该用户的所有任务为失败
                 start_index = start_indices[idx]
-                for i in range(len(user["tasks"])):
+                task_count = len(user.get("tasks", [user]))
+                for i in range(task_count):
                     if start_index + i < len(success_list):
                         success_list[start_index + i] = False
                 continue
@@ -243,20 +262,21 @@ def reserve_all_tasks(session_cache, users, current_dayofweek, success_list):
                 success_list=success_list,
                 start_index=start_index
             )
-            futures.append(future)
+            futures.append((future, idx))
     
     # 收集结果
     new_success_list = success_list.copy()
-    for future in as_completed(futures):
-        results = future.result()
-        if results:
-            # 找到对应的用户索引
-            idx = futures.index(future)
-            start_index = start_indices[idx]
-            # 只更新当前用户的任务结果
-            for i, result in enumerate(results):
-                if start_index + i < len(new_success_list):
-                    new_success_list[start_index + i] = result
+    for future, user_idx in futures:
+        try:
+            results = future.result()
+            if results:
+                start_index = start_indices[user_idx]
+                # 只更新当前用户的任务结果
+                for i, result in enumerate(results):
+                    if start_index + i < len(new_success_list):
+                        new_success_list[start_index + i] = result
+        except Exception as e:
+            logging.error(f"用户 {user_idx} 的任务处理异常: {str(e)}")
     
     return new_success_list
 
@@ -286,7 +306,15 @@ def main(users, action=False):
         logging.info("开始预约流程")
         
         current_dayofweek = get_current_dayofweek(action)
-        total_tasks = sum(len(user["tasks"]) for user in users)
+        
+        # 计算总任务数
+        total_tasks = 0
+        for user in users:
+            if "tasks" in user:
+                total_tasks += len(user["tasks"])
+            else:
+                total_tasks += 1
+        
         success_list = [False] * total_tasks
 
         # 只执行一次预约流程
@@ -307,20 +335,29 @@ def main(users, action=False):
             logging.info(f"预约完成，成功: {success_count}, 失败: {failed_count}")
             
             # 记录失败任务详情
+            task_idx = 0
             for i, user in enumerate(users):
-                start_index = sum(len(u["tasks"]) for u in users[:i])
-                for j, task in enumerate(user["tasks"]):
-                    idx = start_index + j
-                    if idx < len(success_list) and not success_list[idx]:
-                        logging.warning(f"用户 {user['username']} 任务 {j} 预约失败")
+                user_tasks = user.get("tasks", [user])
+                for j, task in enumerate(user_tasks):
+                    if task_idx < len(success_list) and not success_list[task_idx]:
+                        logging.warning(f"用户 {user.get('username', '')} 任务 {j} 预约失败")
+                    task_idx += 1
 
     else:
         # 非GitHub Actions模式 - 立即执行
         logging.info("本地模式 - 立即执行")
-        usernames, passwords = "", ""
+        usernames, passwords = get_user_credentials(action)
         session_cache = login_all_users(users, usernames, passwords, action)
         current_dayofweek = get_current_dayofweek(action)
-        total_tasks = sum(len(user["tasks"]) for user in users)
+        
+        # 计算总任务数
+        total_tasks = 0
+        for user in users:
+            if "tasks" in user:
+                total_tasks += len(user["tasks"])
+            else:
+                total_tasks += 1
+        
         success_list = [False] * total_tasks
         success_list = reserve_all_tasks(session_cache, users, current_dayofweek, success_list)
         logging.info(f"预约结果: {success_list}")
@@ -329,25 +366,26 @@ def debug(users, action=False):
     logging.info(f"调试模式启动")
     logging.info(f"全局设置: SLEEPTIME={SLEEPTIME}, ENDTIME={ENDTIME}, ENABLE_SLIDER={ENABLE_SLIDER}, RESERVE_TOMORROW={RESERVE_TOMORROW}")
     
-    usernames, passwords = "", ""
-    if action:
-        usernames, passwords = get_user_credentials(action)
+    usernames, passwords = get_user_credentials(action)
     
     session_cache = login_all_users(users, usernames, passwords, action)
     current_dayofweek = get_current_dayofweek(action)
     
-    for username, session in session_cache.items():
-        user = next((u for u in users if u["username"] == username), None)
+    for username, session_info in session_cache.items():
+        user = next((u for u in users if u.get("username") == username), None)
         if not user:
             continue
+        
+        # 获取用户任务列表
+        user_tasks = user.get("tasks", [user])
             
         # 并行处理用户的所有任务
-        with ThreadPoolExecutor(max_workers=len(user["tasks"])) as executor:
+        with ThreadPoolExecutor(max_workers=len(user_tasks)) as executor:
             futures = []
-            for task_index, task in enumerate(user["tasks"]):
+            for task_index, task in enumerate(user_tasks):
                 futures.append(executor.submit(
                     process_single_task,
-                    session=session["session"],
+                    session=session_info["session"],
                     task=task,
                     username=username,
                     global_index=task_index+1,
