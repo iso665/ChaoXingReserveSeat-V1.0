@@ -5,21 +5,27 @@
             "password": "用户1密码",
             "tasks": [
                 {
-                    "time": ["08:00", "12:30"],
-                    "roomid": "8215",
-                    "seatid": ["137"],
+                    "time": ["09:00", "13:00"],
+                    "roomid": "6913",
+                    "seatid": ["053"],
                     "daysofweek": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday","Saturday" , "Sunday"]
                 },
                 {
-                    "time": ["14:30", "18:00"],
-                    "roomid": "8215",
-                    "seatid": ["137"],
+                    "time": ["13:00", "17:00"],
+                    "roomid": "6913",
+                    "seatid": ["053"],
                     "daysofweek": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday","Saturday" , "Sunday"]
                 },
                 {
-                    "time": ["18:30", "22:00"],
-                    "roomid": "8215",
-                    "seatid": ["137"],
+                    "time": ["17:00", "21:00"],
+                    "roomid": "6913",
+                    "seatid": ["053"],
+                    "daysofweek": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday","Saturday" , "Sunday"]
+                },
+                {
+                    "time": ["21:00", "22:00"],
+                    "roomid": "6913",
+                    "seatid": ["053"],
                     "daysofweek": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday","Saturday" , "Sunday"]
                 }
             ]
