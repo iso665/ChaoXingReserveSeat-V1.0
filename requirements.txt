@@ -1,5 +1,0 @@
-requests
-cryptography
-opencv-python
-numpy
-pytz
