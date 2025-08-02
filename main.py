@@ -4,35 +4,46 @@ import argparse
 import os
 import logging
 import datetime
-import pytz
+import calendar
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 from utils import reserve, get_user_credentials
 
-# 修复时间处理函数 - 使用pytz正确处理时区
+# 移除pytz依赖 - 使用简单的时间偏移处理北京时间
 def get_current_time(action):
     """获取当前北京时间"""
-    tz = pytz.timezone('Asia/Shanghai')
-    now = datetime.datetime.now(tz)
-    return now.strftime("%H:%M:%S")
+    # 北京时间 = UTC + 8小时
+    beijing_time = time.time() + 8 * 3600
+    return time.strftime("%H:%M:%S", time.gmtime(beijing_time))
 
 def get_current_dayofweek(action):
     """获取当前星期几（英文）"""
-    tz = pytz.timezone('Asia/Shanghai')
-    now = datetime.datetime.now(tz)
-    return now.strftime("%A")
+    # 北京时间 = UTC + 8小时
+    beijing_time = time.time() + 8 * 3600
+    return time.strftime("%A", time.gmtime(beijing_time))
 
 # 等待直到指定时间
 def wait_until(target_time):
     """等待直到指定时间（北京时间）"""
-    tz = pytz.timezone('Asia/Shanghai')
+    h, m, s = map(int, target_time.split(':'))
+    
     while True:
-        now = datetime.datetime.now(tz)
-        current_time = now.strftime("%H:%M:%S")
-        if current_time >= target_time:
+        # 获取当前北京时间
+        beijing_time = time.time() + 8 * 3600
+        current_struct = time.gmtime(beijing_time)
+        current_time = time.strftime("%H:%M:%S", current_struct)
+        
+        # 检查是否到达目标时间
+        current_h, current_m, current_s = current_struct.tm_hour, current_struct.tm_min, current_struct.tm_sec
+        current_total_seconds = current_h * 3600 + current_m * 60 + current_s
+        target_total_seconds = h * 3600 + m * 60 + s
+        
+        if current_total_seconds >= target_total_seconds:
+            logging.info(f"到达目标时间 {target_time}（北京时间），开始执行")
             break
+        
         time.sleep(0.5)
 
 # 全局配置
