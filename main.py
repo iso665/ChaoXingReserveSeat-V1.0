@@ -50,7 +50,7 @@ def wait_until(target_time):
 SLEEPTIME = 0.1  # 减少等待时间
 ENDTIME = "22:01:00"
 ENABLE_SLIDER = False
-MAX_ATTEMPT = 3  # 减少尝试次数
+MAX_ATTEMPT = 5  # 增加尝试次数以应对加密验证
 RESERVE_TOMORROW = True
 
 def login_user(user_config, username_override, password_override, action):
@@ -143,8 +143,8 @@ def login_all_users(users, usernames, passwords, action):
     
     return session_cache
 
-def process_single_task(session, task, username, global_index, current_dayofweek, is_success):
-    """处理单个预约任务"""
+def process_single_task(session, task, username, global_index, current_dayofweek, is_success, action=False):
+    """处理单个预约任务 - 增强版错误处理"""
     # 在任务开始前检查会话有效性
     if not session.requests.cookies.get("JSESSIONID"):
         logging.warning("会话已过期，尝试重新登录")
@@ -175,17 +175,34 @@ def process_single_task(session, task, username, global_index, current_dayofweek
         return True
         
     logging.info(f"----------- {username} -- 任务 {global_index}: {times} -- {seatid} 尝试预约 -----------")
-    try:
-        suc = session.submit(times, roomid, seatid, action)
-        if suc:
-            logging.info(f"任务 {global_index} 预约成功!")
-        return suc
-    except Exception as e:
-        # 添加更详细的错误信息
-        logging.error(f"任务 {global_index} 异常: {str(e)}")
-        return False
+    
+    # 增加重试机制来处理enc验证失败
+    max_retries = 3
+    for retry in range(max_retries):
+        try:
+            if retry > 0:
+                logging.info(f"任务 {global_index} 第 {retry + 1} 次重试")
+                time.sleep(0.5)  # 重试前稍等
+            
+            suc = session.submit(times, roomid, seatid, action)
+            if suc:
+                logging.info(f"任务 {global_index} 预约成功!")
+                return True
+            else:
+                if retry < max_retries - 1:
+                    logging.warning(f"任务 {global_index} 第 {retry + 1} 次尝试失败，准备重试")
+                else:
+                    logging.error(f"任务 {global_index} 所有重试都失败")
+                    
+        except Exception as e:
+            # 添加更详细的错误信息
+            logging.error(f"任务 {global_index} 第 {retry + 1} 次尝试异常: {str(e)}")
+            if retry < max_retries - 1:
+                logging.info(f"准备第 {retry + 2} 次重试")
+            
+    return False
 
-def process_user_tasks(session, user, current_dayofweek, success_list, start_index):
+def process_user_tasks(session, user, current_dayofweek, success_list, start_index, action=False):
     """并行处理单个用户的所有预约任务"""
     task_results = []
     username = user.get("username", "")
@@ -209,7 +226,8 @@ def process_user_tasks(session, user, current_dayofweek, success_list, start_ind
                 username=username,
                 global_index=global_index,
                 current_dayofweek=current_dayofweek,
-                is_success=success_list[global_index] if global_index < len(success_list) else False
+                is_success=success_list[global_index] if global_index < len(success_list) else False,
+                action=action
             ))
         
         # 收集结果 - 确保按原始顺序收集
@@ -217,7 +235,7 @@ def process_user_tasks(session, user, current_dayofweek, success_list, start_ind
     
     return task_results
 
-def reserve_all_tasks(session_cache, users, current_dayofweek, success_list):
+def reserve_all_tasks(session_cache, users, current_dayofweek, success_list, action=False):
     """并发预约所有用户的任务"""
     # 计算总任务数（兼容新旧格式）
     total_tasks = 0
@@ -271,7 +289,8 @@ def reserve_all_tasks(session_cache, users, current_dayofweek, success_list):
                 user=user,
                 current_dayofweek=current_dayofweek,
                 success_list=success_list,
-                start_index=start_index
+                start_index=start_index,
+                action=action
             )
             futures.append((future, idx))
     
@@ -333,7 +352,8 @@ def main(users, action=False):
             session_cache=session_cache,
             users=users,
             current_dayofweek=current_dayofweek,
-            success_list=success_list
+            success_list=success_list,
+            action=action
         )
 
         # 检查结果
@@ -370,7 +390,7 @@ def main(users, action=False):
                 total_tasks += 1
         
         success_list = [False] * total_tasks
-        success_list = reserve_all_tasks(session_cache, users, current_dayofweek, success_list)
+        success_list = reserve_all_tasks(session_cache, users, current_dayofweek, success_list, action)
         logging.info(f"预约结果: {success_list}")
 
 def debug(users, action=False):
@@ -401,7 +421,8 @@ def debug(users, action=False):
                     username=username,
                     global_index=task_index+1,
                     current_dayofweek=current_dayofweek,
-                    is_success=False
+                    is_success=False,
+                    action=action
                 ))
             
             for future in as_completed(futures):
