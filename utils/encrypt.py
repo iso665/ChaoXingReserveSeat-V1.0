@@ -139,4 +139,6 @@ def verify_param_v2(params, algorithm_value):
         
         return hashlib.md5(hash_string.encode("utf-8")).hexdigest()
         
-    except Exception as
+    except Exception as e:
+        logging.error(f"verify_param_v2错误: {str(e)}")
+        return None
