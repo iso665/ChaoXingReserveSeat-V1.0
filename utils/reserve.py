@@ -66,21 +66,49 @@ class reserve:
         self.reserve_next_day = reserve_next_day
         requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
 
-    # login and page token
     def _get_page_token(self, url, require_value=False):
-        response = self.requests.get(url=url, verify=False)
-        html = response.content.decode("utf-8")
-        matches = re.findall(r"token = \'(.*?)\'", html)
-        value_matches = None
-        if require_value:
-            value_matches = re.findall(r'value="(.*?)"', html)
+        """获取页面token和算法值"""
+        try:
+            response = self.requests.get(url=url, verify=False, timeout=10)
+            html = response.content.decode("utf-8")
+            
+            # 获取token
+            matches = re.findall(r"token = \'(.*?)\'", html)
             if not matches:
-                logging.error(f"Failed to get token from {url}")
-                return "", ""
-            if not value_matches:
-                logging.error(f"Failed to get submit value from {url}")
-                return matches[0], ""
-        return matches[0] if matches else "", value_matches[0] if value_matches else ""
+                # 尝试其他token格式
+                matches = re.findall(r'token\s*=\s*["\']([^"\']*)["\']', html)
+            
+            value_matches = []
+            if require_value:
+                # 多种方式尝试获取算法值
+                patterns = [
+                    r'id\s*=\s*["\']algorithm["\'][^>]*value\s*=\s*["\']([^"\']*)["\']',
+                    r'value\s*=\s*["\']([^"\']*)["\'][^>]*id\s*=\s*["\']algorithm["\']',
+                    r'var\s+algorithm\s*=\s*["\']([^"\']*)["\']',
+                    r'algorithm["\'].*?value\s*=\s*["\']([^"\']*)["\']',
+                    r'<input[^>]*name\s*=\s*["\']algorithm["\'][^>]*value\s*=\s*["\']([^"\']*)["\']',
+                ]
+                
+                for pattern in patterns:
+                    value_matches = re.findall(pattern, html)
+                    if value_matches:
+                        break
+                
+                if not value_matches:
+                    logging.warning(f"无法从页面获取算法值，使用默认值")
+                    value_matches = ["%sd`~7^/>N4!Q#{']"]  # 默认算法值
+            
+            token = matches[0] if matches else ""
+            algorithm_value = value_matches[0] if value_matches else ""
+            
+            if require_value:
+                logging.info(f"获取到 token: {token}, algorithm: {algorithm_value}")
+            
+            return token, algorithm_value
+            
+        except Exception as e:
+            logging.error(f"获取页面token失败: {str(e)}")
+            return "", ""
 
     def get_login_status(self):
         self.requests.headers = self.login_headers
@@ -96,43 +124,49 @@ class reserve:
             "refer": "http%3A%2F%2Foffice.chaoxing.com%2Ffront%2Fthird%2Fapps%2Fseat%2Fcode%3Fid%3D4219%26seatNum%3D380",
             "t": True,
         }
-        jsons = self.requests.post(url=self.login_url, params=parm, verify=False)
-        obj = jsons.json()
-        if obj["status"]:
-            logging.info(f"User {username} login successfully")
-            return (True, "")
-        else:
-            logging.info(
-                f"User {username} login failed. Please check you password and username! "
-            )
-            return (False, obj["msg2"])
+        try:
+            jsons = self.requests.post(url=self.login_url, params=parm, verify=False, timeout=10)
+            obj = jsons.json()
+            if obj["status"]:
+                logging.info(f"用户登录成功")
+                return (True, "")
+            else:
+                logging.error(f"用户登录失败，请检查用户名和密码: {obj.get('msg2', '未知错误')}")
+                return (False, obj.get("msg2", "登录失败"))
+        except Exception as e:
+            logging.error(f"登录请求异常: {str(e)}")
+            return (False, f"登录请求异常: {str(e)}")
 
-    # extra: get roomid
     def roomid(self, encode):
+        """获取房间ID"""
         url = f"https://office.chaoxing.com/data/apps/seat/room/list?cpage=1&pageSize=100&firstLevelName=&secondLevelName=&thirdLevelName=&deptIdEnc={encode}"
-        json_data = self.requests.get(url=url).content.decode("utf-8")
-        ori_data = json.loads(json_data)
-        for i in ori_data["data"]["seatRoomList"]:
-            info = f'{i["firstLevelName"]}-{i["secondLevelName"]}-{i["thirdLevelName"]} id为：{i["id"]}'
-            print(info)
+        try:
+            response = self.requests.get(url=url, timeout=10)
+            json_data = response.content.decode("utf-8")
+            ori_data = json.loads(json_data)
+            for i in ori_data["data"]["seatRoomList"]:
+                info = f'{i["firstLevelName"]}-{i["secondLevelName"]}-{i["thirdLevelName"]} id为：{i["id"]}'
+                print(info)
+        except Exception as e:
+            logging.error(f"获取房间ID失败: {str(e)}")
 
-    # solve captcha
     def resolve_captcha(self):
-        logging.info(f"Start to resolve captcha token")
+        """解决验证码"""
+        logging.info(f"开始解决验证码")
         captcha_token, bg, tp = self.get_slide_captcha_data()
         
         if not captcha_token or not bg or not tp:
-            logging.error(f"Skip this attempt due to failure of getting captcha data.")
+            logging.error(f"获取验证码数据失败，跳过此次尝试")
             return ""
     
-        logging.info(f"Successfully get prepared captcha_token {captcha_token}")
-        logging.info(f"Captcha Image URL-small {tp}, URL-big {bg}")
+        logging.info(f"成功获取验证码token: {captcha_token}")
+        logging.info(f"验证码图片 URL-小图: {tp}, URL-大图: {bg}")
     
         try:
             x = self.x_distance(bg, tp)
-            logging.info(f"Successfully calculate the captcha distance {x}")
+            logging.info(f"成功计算验证码距离: {x}")
         except Exception as e:
-            logging.error(f"Error calculating x distance: {e}")
+            logging.error(f"计算验证码距离出错: {e}")
             x = 0
 
         params = {
@@ -157,14 +191,15 @@ class reserve:
                 "jQuery33109180509737430778_1716381333117(", ""
             ).replace(")", "")
             data = json.loads(text)
-            logging.info(f"Successfully resolve the captcha token {data}")
+            logging.info(f"验证码解决结果: {data}")
             validate_val = json.loads(data.get("extraData", "{}")).get('validate', "")
             return validate_val
         except Exception as e:
-            logging.error(f"Error while resolving captcha: {e}")
+            logging.error(f"解决验证码时出错: {e}")
             return ""
 
     def get_slide_captcha_data(self):
+        """获取滑动验证码数据"""
         url = "https://captcha.chaoxing.com/captcha/get/verification/image"
         timestamp = int(time.time() * 1000)
         capture_key, token = generate_captcha_key(timestamp)
@@ -193,10 +228,11 @@ class reserve:
             tp = data["imageVerificationVo"]["cutoutImage"]
             return captcha_token, bg, tp
         except Exception as e:
-            logging.error(f"Error fetching captcha data: {e}")
+            logging.error(f"获取验证码数据失败: {e}")
             return None, None, None
 
     def x_distance(self, bg, tp):
+        """计算验证码滑动距离"""
         import numpy as np
         import cv2
 
@@ -240,61 +276,120 @@ class reserve:
         return tl[0]
 
     def submit(self, times, roomid, seatid, action):
+        """提交预约请求"""
         for seat in seatid:
             suc = False
-            while ~suc and self.max_attempt > 0:
-                token, value = self._get_page_token(
-                    self.url.format(roomid, seat), require_value=True
-                )
-                logging.info(f"Get token: {token}")
-                captcha = self.resolve_captcha() if self.enable_slider else ""
-                logging.info(f"Captcha token {captcha}")
-                suc = self.get_submit(
-                    self.submit_url,
-                    times=times,
-                    token=token,
-                    roomid=roomid,
-                    seatid=seat,
-                    captcha=captcha,
-                    action=action,
-                    value=value,
-                )
-                if suc:
-                    return suc
+            attempt_count = 0
+            while not suc and attempt_count < self.max_attempt:
+                try:
+                    token, value = self._get_page_token(
+                        self.url.format(roomid, seat), require_value=True
+                    )
+                    logging.info(f"获取到 token: {token}, algorithm value: {value}")
+                    
+                    if not token:
+                        logging.error("获取token失败，跳过此次尝试")
+                        attempt_count += 1
+                        time.sleep(self.sleep_time)
+                        continue
+                    
+                    captcha = self.resolve_captcha() if self.enable_slider else ""
+                    logging.info(f"验证码token: {captcha}")
+                    
+                    suc = self.get_submit(
+                        self.submit_url,
+                        times=times,
+                        token=token,
+                        roomid=roomid,
+                        seatid=seat,
+                        captcha=captcha,
+                        action=action,
+                        value=value,
+                    )
+                    if suc:
+                        return suc
+                        
+                except Exception as e:
+                    logging.error(f"提交尝试失败: {str(e)}")
+                    
+                attempt_count += 1
                 time.sleep(self.sleep_time)
-                self.max_attempt -= 1
+                
         return suc
 
-    def get_submit(
-        self, url, times, token, roomid, seatid, captcha="", action=False, value=""
-    ):
+    def get_submit(self, url, times, token, roomid, seatid, captcha="", action=False, value=""):
+        """发送预约提交请求"""
         delta_day = 1 if self.reserve_next_day else 0
-        day = datetime.date.today() + datetime.timedelta(
-            days=0 + delta_day
-        )  # 预约今天，修改days=1表示预约明天
+        day = datetime.date.today() + datetime.timedelta(days=0 + delta_day)
         if action:
-            day = datetime.date.today() + datetime.timedelta(
-                days=1 + delta_day
-            )  # 由于action时区问题导致其早+8区一天
+            day = datetime.date.today() + datetime.timedelta(days=1 + delta_day)
+            
+        # 构建参数字典 - 确保参数名称和顺序正确
         parm = {
-            "roomId": roomid,
-            "startTime": times[0],
-            "endTime": times[1],
-            "day": str(day),
-            "seatNum": seatid,
             "captcha": captcha,
+            "day": str(day),
+            "endTime": times[1],
+            "roomId": str(roomid),
+            "seatNum": str(seatid),
+            "startTime": times[0],
             "token": token,
             "type": "1",
             "verifyData": "1",
         }
-        logging.info(f"submit parameter {parm} ")
-        # 使用新的verify_param函数替代原来的enc函数
-        parm["enc"] = verify_param(parm, value)
-        html = self.requests.post(url=url, params=parm, verify=True).content.decode(
-            "utf-8"
-        )
-        self.submit_msg.append(
-            times[0] + "~" + times[1] + ":  " + str(json.loads(html))
-        )
-        logging.info(json.loads(html))
-        return json.loads(html)["success"]
+        
+        logging.info(f"提交参数: {parm}")
+        
+        # 使用算法值，如果没有获取到则使用默认值
+        algorithm_value = value if value else "%sd`~7^/>N4!Q#{'"
+        
+        # 生成enc参数 - 只包含需要加密的核心参数
+        encrypt_params = {
+            "captcha": captcha,
+            "day": str(day),
+            "endTime": times[1],
+            "roomId": str(roomid),
+            "seatNum": str(seatid),
+            "startTime": times[0],
+            "token": token
+        }
+        
+        try:
+            parm["enc"] = verify_param(encrypt_params, algorithm_value)
+            logging.info(f"生成的enc: {parm['enc']}")
+        except Exception as e:
+            logging.error(f"生成enc参数出错: {str(e)}")
+            # 尝试使用旧的enc函数作为备用
+            try:
+                parm["enc"] = enc(encrypt_params)
+                logging.info(f"使用备用enc: {parm['enc']}")
+            except Exception as e2:
+                logging.error(f"备用enc也失败: {str(e2)}")
+                return False
+        
+        try:
+            # 发送请求
+            response = self.requests.post(url=url, params=parm, verify=True, timeout=10)
+            html = response.content.decode("utf-8")
+            
+            # 记录提交信息
+            self.submit_msg.append(times[0] + "~" + times[1] + ":  " + str(json.loads(html)))
+            
+            result = json.loads(html)
+            logging.info(f"提交响应: {result}")
+            
+            # 检查响应状态
+            if "success" in result:
+                return result["success"]
+            elif "status" in result:
+                return result["status"]
+            else:
+                logging.warning(f"意外的响应格式: {result}")
+                return False
+                
+        except json.JSONDecodeError as e:
+            logging.error(f"解析响应JSON失败: {str(e)}")
+            logging.error(f"原始响应: {html}")
+            return False
+        except Exception as e:
+            logging.error(f"提交请求失败: {str(e)}")
+            return False
