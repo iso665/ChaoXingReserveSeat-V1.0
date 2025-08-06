@@ -6,6 +6,7 @@ import time
 import logging
 import datetime
 from urllib3.exceptions import InsecureRequestWarning
+from bs4 import BeautifulSoup
 
 
 def get_date(day_offset: int = 0):
@@ -67,47 +68,140 @@ class reserve:
         requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
 
     def _get_page_token(self, url, require_value=False):
-        """获取页面token和算法值"""
+        """获取页面token和算法值 - 增强版本"""
         try:
-            response = self.requests.get(url=url, verify=False, timeout=10)
-            html = response.content.decode("utf-8")
+            # 设置更真实的请求头
+            page_headers = {
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+                "Accept-Encoding": "gzip, deflate, br",
+                "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "Host": "office.chaoxing.com",
+                "Pragma": "no-cache",
+                "Referer": "https://office.chaoxing.com/",
+                "Sec-Ch-Ua": '"Google Chrome";v="128", "Chromium";v="128", "Not.A/Brand";v="24"',
+                "Sec-Ch-Ua-Mobile": "?0",
+                "Sec-Ch-Ua-Platform": '"Linux"',
+                "Sec-Fetch-Dest": "document",
+                "Sec-Fetch-Mode": "navigate",
+                "Sec-Fetch-Site": "same-origin",
+                "Sec-Fetch-User": "?1",
+                "Upgrade-Insecure-Requests": "1",
+                "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+            }
             
-            # 获取token
-            matches = re.findall(r"token = \'(.*?)\'", html)
-            if not matches:
-                # 尝试其他token格式
-                matches = re.findall(r'token\s*=\s*["\']([^"\']*)["\']', html)
+            response = self.requests.get(url=url, headers=page_headers, verify=False, timeout=15)
+            response.raise_for_status()
             
-            value_matches = []
-            if require_value:
-                # 多种方式尝试获取算法值
-                patterns = [
-                    r'id\s*=\s*["\']algorithm["\'][^>]*value\s*=\s*["\']([^"\']*)["\']',
-                    r'value\s*=\s*["\']([^"\']*)["\'][^>]*id\s*=\s*["\']algorithm["\']',
-                    r'var\s+algorithm\s*=\s*["\']([^"\']*)["\']',
-                    r'algorithm["\'].*?value\s*=\s*["\']([^"\']*)["\']',
-                    r'<input[^>]*name\s*=\s*["\']algorithm["\'][^>]*value\s*=\s*["\']([^"\']*)["\']',
+            # 确保页面完全加载
+            time.sleep(0.2)
+            
+            html = response.content.decode("utf-8", errors='ignore')
+            
+            # 保存HTML用于调试
+            logging.debug(f"获取的页面长度: {len(html)}")
+            
+            # 获取token - 多种模式匹配
+            token = ""
+            token_patterns = [
+                r"token\s*=\s*['\"]([^'\"]+)['\"]",
+                r"token\s*:\s*['\"]([^'\"]+)['\"]",
+                r"var\s+token\s*=\s*['\"]([^'\"]+)['\"]",
+                r"let\s+token\s*=\s*['\"]([^'\"]+)['\"]",
+                r"const\s+token\s*=\s*['\"]([^'\"]+)['\"]",
+                r"'token':\s*['\"]([^'\"]+)['\"]",
+                r'"token":\s*[\'"]([^\'"]+)[\'"]'
+            ]
+            
+            for pattern in token_patterns:
+                matches = re.findall(pattern, html, re.IGNORECASE)
+                if matches:
+                    token = matches[0]
+                    logging.info(f"使用模式 {pattern} 找到token: {token}")
+                    break
+            
+            if not token:
+                logging.warning("未找到token，尝试从JavaScript中提取")
+                # 尝试从更复杂的JavaScript结构中提取
+                js_patterns = [
+                    r'data-token\s*=\s*["\']([^"\']+)["\']',
+                    r'token["\']?\s*:\s*["\']([^"\']+)["\']'
                 ]
-                
-                for pattern in patterns:
-                    value_matches = re.findall(pattern, html)
-                    if value_matches:
+                for pattern in js_patterns:
+                    matches = re.findall(pattern, html, re.IGNORECASE)
+                    if matches:
+                        token = matches[0]
                         break
-                
-                if not value_matches:
-                    logging.warning(f"无法从页面获取算法值，使用默认值")
-                    value_matches = ["%sd`~7^/>N4!Q#{']"]  # 默认算法值
             
-            token = matches[0] if matches else ""
-            algorithm_value = value_matches[0] if value_matches else ""
-            
+            # 获取算法值
+            algorithm_value = ""
             if require_value:
-                logging.info(f"获取到 token: {token}, algorithm: {algorithm_value}")
+                # 使用BeautifulSoup更准确地解析HTML
+                try:
+                    from bs4 import BeautifulSoup
+                    soup = BeautifulSoup(html, 'html.parser')
+                    
+                    # 查找id为algorithm的元素
+                    algorithm_elem = soup.find(attrs={'id': 'algorithm'})
+                    if algorithm_elem:
+                        algorithm_value = algorithm_elem.get('value', '')
+                        logging.info(f"通过BeautifulSoup找到algorithm值: {algorithm_value}")
+                    
+                    # 如果没找到，尝试name属性
+                    if not algorithm_value:
+                        algorithm_elem = soup.find(attrs={'name': 'algorithm'})
+                        if algorithm_elem:
+                            algorithm_value = algorithm_elem.get('value', '')
+                            logging.info(f"通过name属性找到algorithm值: {algorithm_value}")
+                            
+                except ImportError:
+                    logging.warning("BeautifulSoup未安装，使用正则表达式")
+                
+                # 如果BeautifulSoup没找到，使用正则表达式
+                if not algorithm_value:
+                    algorithm_patterns = [
+                        r'<input[^>]*\bid\s*=\s*["\']algorithm["\'][^>]*\bvalue\s*=\s*["\']([^"\']*)["\']',
+                        r'<input[^>]*\bvalue\s*=\s*["\']([^"\']*)["\'][^>]*\bid\s*=\s*["\']algorithm["\']',
+                        r'<input[^>]*\bname\s*=\s*["\']algorithm["\'][^>]*\bvalue\s*=\s*["\']([^"\']*)["\']',
+                        r'var\s+algorithm\s*=\s*["\']([^"\']*)["\']',
+                        r'let\s+algorithm\s*=\s*["\']([^"\']*)["\']',
+                        r'const\s+algorithm\s*=\s*["\']([^"\']*)["\']',
+                        r'algorithm\s*:\s*["\']([^"\']*)["\']',
+                        r'"algorithm"\s*:\s*["\']([^"\']*)["\']'
+                    ]
+                    
+                    for pattern in algorithm_patterns:
+                        matches = re.findall(pattern, html, re.IGNORECASE | re.DOTALL)
+                        if matches:
+                            algorithm_value = matches[0]
+                            logging.info(f"使用正则表达式找到algorithm值: {algorithm_value}")
+                            break
+                
+                # 如果还是没找到，尝试从script标签中提取
+                if not algorithm_value:
+                    script_pattern = r'<script[^>]*>(.*?)</script>'
+                    scripts = re.findall(script_pattern, html, re.IGNORECASE | re.DOTALL)
+                    for script in scripts:
+                        if 'algorithm' in script.lower():
+                            algo_matches = re.findall(r'algorithm["\']?\s*[=:]\s*["\']([^"\']+)["\']', script, re.IGNORECASE)
+                            if algo_matches:
+                                algorithm_value = algo_matches[0]
+                                logging.info(f"从script标签找到algorithm值: {algorithm_value}")
+                                break
+                
+                if not algorithm_value:
+                    logging.warning("无法从页面获取算法值，使用默认值")
+                    algorithm_value = "%sd`~7^/>N4!Q#{'"
+            
+            logging.info(f"最终获取结果 - token: {token}, algorithm: {algorithm_value}")
             
             return token, algorithm_value
             
         except Exception as e:
             logging.error(f"获取页面token失败: {str(e)}")
+            import traceback
+            logging.error(f"详细错误信息: {traceback.format_exc()}")
             return "", ""
 
     def get_login_status(self):
@@ -276,25 +370,33 @@ class reserve:
         return tl[0]
 
     def submit(self, times, roomid, seatid, action):
-        """提交预约请求"""
+        """提交预约请求 - 增强版本"""
         for seat in seatid:
             suc = False
             attempt_count = 0
             while not suc and attempt_count < self.max_attempt:
                 try:
+                    # 增加重试间隔，避免请求过于频繁
+                    if attempt_count > 0:
+                        time.sleep(min(self.sleep_time * attempt_count, 2.0))
+                    
+                    logging.info(f"第 {attempt_count + 1} 次尝试获取页面信息")
+                    
                     token, value = self._get_page_token(
                         self.url.format(roomid, seat), require_value=True
                     )
-                    logging.info(f"获取到 token: {token}, algorithm value: {value}")
                     
                     if not token:
                         logging.error("获取token失败，跳过此次尝试")
                         attempt_count += 1
-                        time.sleep(self.sleep_time)
                         continue
                     
+                    logging.info(f"获取到 token: {token}")
+                    logging.info(f"获取到 algorithm value: {value}")
+                    
                     captcha = self.resolve_captcha() if self.enable_slider else ""
-                    logging.info(f"验证码token: {captcha}")
+                    if self.enable_slider:
+                        logging.info(f"验证码token: {captcha}")
                     
                     suc = self.get_submit(
                         self.submit_url,
@@ -306,19 +408,24 @@ class reserve:
                         action=action,
                         value=value,
                     )
+                    
                     if suc:
+                        logging.info(f"座位 {seat} 预约成功!")
                         return suc
+                    else:
+                        logging.warning(f"座位 {seat} 第 {attempt_count + 1} 次尝试失败")
                         
                 except Exception as e:
-                    logging.error(f"提交尝试失败: {str(e)}")
+                    logging.error(f"座位 {seat} 第 {attempt_count + 1} 次尝试异常: {str(e)}")
+                    import traceback
+                    logging.debug(f"详细错误: {traceback.format_exc()}")
                     
                 attempt_count += 1
-                time.sleep(self.sleep_time)
                 
         return suc
 
     def get_submit(self, url, times, token, roomid, seatid, captcha="", action=False, value=""):
-        """发送预约提交请求"""
+        """发送预约提交请求 - 增强版本"""
         delta_day = 1 if self.reserve_next_day else 0
         day = datetime.date.today() + datetime.timedelta(days=0 + delta_day)
         if action:
@@ -339,7 +446,7 @@ class reserve:
         
         logging.info(f"提交参数: {parm}")
         
-        # 使用算法值，如果没有获取到则使用默认值
+        # 使用算法值生成enc参数
         algorithm_value = value if value else "%sd`~7^/>N4!Q#{'"
         
         # 生成enc参数 - 只包含需要加密的核心参数
@@ -353,43 +460,114 @@ class reserve:
             "token": token
         }
         
-        try:
-            parm["enc"] = verify_param(encrypt_params, algorithm_value)
-            logging.info(f"生成的enc: {parm['enc']}")
-        except Exception as e:
-            logging.error(f"生成enc参数出错: {str(e)}")
-            # 尝试使用旧的enc函数作为备用
+        # 尝试多种算法生成enc
+        enc_generated = False
+        
+        # 方法1: 使用获取的algorithm值
+        if not enc_generated:
+            try:
+                parm["enc"] = verify_param(encrypt_params, algorithm_value)
+                logging.info(f"使用algorithm值生成enc: {parm['enc']}")
+                enc_generated = True
+            except Exception as e:
+                logging.warning(f"使用algorithm值生成enc失败: {str(e)}")
+        
+        # 方法2: 使用默认算法值
+        if not enc_generated:
+            try:
+                parm["enc"] = verify_param(encrypt_params, "%sd`~7^/>N4!Q#{'")
+                logging.info(f"使用默认算法值生成enc: {parm['enc']}")
+                enc_generated = True
+            except Exception as e:
+                logging.warning(f"使用默认算法值生成enc失败: {str(e)}")
+        
+        # 方法3: 使用旧版enc算法
+        if not enc_generated:
             try:
                 parm["enc"] = enc(encrypt_params)
-                logging.info(f"使用备用enc: {parm['enc']}")
-            except Exception as e2:
-                logging.error(f"备用enc也失败: {str(e2)}")
+                logging.info(f"使用旧版算法生成enc: {parm['enc']}")
+                enc_generated = True
+            except Exception as e:
+                logging.error(f"所有enc生成方法都失败: {str(e)}")
                 return False
         
+        if not enc_generated:
+            logging.error("无法生成enc参数，取消提交")
+            return False
+        
         try:
-            # 发送请求
-            response = self.requests.post(url=url, params=parm, verify=True, timeout=10)
+            # 设置提交请求头
+            submit_headers = {
+                "Accept": "application/json, text/javascript, */*; q=0.01",
+                "Accept-Encoding": "gzip, deflate, br",
+                "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+                "Host": "office.chaoxing.com",
+                "Origin": "https://office.chaoxing.com",
+                "Pragma": "no-cache",
+                "Referer": f"https://office.chaoxing.com/front/third/apps/seat/code?id={roomid}&seatNum={seatid}",
+                "Sec-Ch-Ua": '"Google Chrome";v="128", "Chromium";v="128", "Not.A/Brand";v="24"',
+                "Sec-Ch-Ua-Mobile": "?0",
+                "Sec-Ch-Ua-Platform": '"Linux"',
+                "Sec-Fetch-Dest": "empty",
+                "Sec-Fetch-Mode": "cors",
+                "Sec-Fetch-Site": "same-origin",
+                "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+                "X-Requested-With": "XMLHttpRequest"
+            }
+            
+            # 发送POST请求
+            response = self.requests.post(
+                url=url, 
+                params=parm, 
+                headers=submit_headers,
+                verify=False, 
+                timeout=15
+            )
+            response.raise_for_status()
+            
             html = response.content.decode("utf-8")
             
             # 记录提交信息
-            self.submit_msg.append(times[0] + "~" + times[1] + ":  " + str(json.loads(html)))
+            self.submit_msg.append(f"{times[0]}~{times[1]}: {html}")
             
-            result = json.loads(html)
-            logging.info(f"提交响应: {result}")
-            
-            # 检查响应状态
-            if "success" in result:
-                return result["success"]
-            elif "status" in result:
-                return result["status"]
-            else:
-                logging.warning(f"意外的响应格式: {result}")
+            try:
+                result = json.loads(html)
+                logging.info(f"提交响应: {result}")
+                
+                # 检查响应状态
+                if "success" in result:
+                    if result["success"]:
+                        logging.info("预约成功!")
+                        return True
+                    else:
+                        msg = result.get("msg", "未知错误")
+                        logging.warning(f"预约失败: {msg}")
+                        return False
+                elif "status" in result:
+                    if result["status"]:
+                        logging.info("预约成功!")
+                        return True
+                    else:
+                        msg = result.get("msg", "未知错误")
+                        logging.warning(f"预约失败: {msg}")
+                        return False
+                else:
+                    logging.warning(f"意外的响应格式: {result}")
+                    return False
+                    
+            except json.JSONDecodeError as e:
+                logging.error(f"解析响应JSON失败: {str(e)}")
+                logging.error(f"原始响应: {html}")
                 return False
                 
-        except json.JSONDecodeError as e:
-            logging.error(f"解析响应JSON失败: {str(e)}")
-            logging.error(f"原始响应: {html}")
+        except requests.RequestException as e:
+            logging.error(f"提交请求网络错误: {str(e)}")
             return False
         except Exception as e:
-            logging.error(f"提交请求失败: {str(e)}")
+            logging.error(f"提交请求异常: {str(e)}")
+            import traceback
+            logging.debug(f"详细错误: {traceback.format_exc()}")
             return False
