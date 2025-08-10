@@ -8,7 +8,7 @@ import datetime
 import pytz
 import random
 from urllib3.exceptions import InsecureRequestWarning
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # 禁用不安全的请求警告
 requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
