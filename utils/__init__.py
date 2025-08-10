@@ -1,5 +1,5 @@
 import os 
-from .encrypt import AES_Encrypt, generate_captcha_key, enc
+from .encrypt import AES_Encrypt, generate_captcha_key, enc, generate_behavior_analysis
 from .reserve import reserve
 
 def _fetch_env_variables(env_name, action):
