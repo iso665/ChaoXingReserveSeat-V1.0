@@ -305,7 +305,51 @@ class reserve:
                     self._cached_captcha = validate
                     self._last_captcha_time = time.time()
                     return validate
-                except Exception:
+                except Exception as e:
+                    logging.error(f"请求异常: {str(e)}")
+                
+                time.sleep(self.sleep_time)
+            
+            if not suc:
+                logging.warning(f"座位 {seat} 预约失败，已达最大尝试次数")
+            return suc
+        
+        # 使用线程池并行处理每个座位
+        with ThreadPoolExecutor(max_workers=len(seatid)) as executor:
+            futures = [executor.submit(process_seat, seat) for seat in seatid]
+            results = [future.result() for future in futures]
+        
+        # 只要有一个座位预约成功就返回True
+        return any(results)
+        
+    def copy_session(self):
+        """创建会话的独立副本"""
+        new_session = reserve(
+            sleep_time=self.sleep_time,
+            max_attempt=self.max_attempt,
+            enable_slider=self.enable_slider,
+            reserve_next_day=self.reserve_next_day
+        )
+    
+        # 复制凭证
+        new_session.username = self.username
+        new_session.password = self.password
+    
+        # 复制cookies
+        new_session.requests.cookies = requests.cookies.cookiejar_from_dict(
+            requests.utils.dict_from_cookiejar(self.requests.cookies)
+        )
+    
+        # 复制headers
+        new_session.requests.headers = self.requests.headers.copy()
+        
+        # 复制缓存数据
+        new_session._cached_behavior_analysis = self._cached_behavior_analysis
+        new_session._deptIdEnc = self._deptIdEnc
+        new_session._cached_captcha = self._cached_captcha
+        new_session._last_captcha_time = self._last_captcha_time
+    
+        return new_session:
                     logging.error(f"extraData解析失败: {extra_data}")
                     return ""
             else:
