@@ -25,9 +25,12 @@ class reserve:
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
         })
         
-        # 提取页面关键信息的正则表达式
-        self.token_pattern = re.compile(r"token\s*=\s*'([^']+)'")
-        self.deptIdEnc_pattern = re.compile(r'deptIdEnc:"([^"]+)"')
+        # 【核心修改】升级正则表达式，使其能够匹配多种格式，例如:
+        # deptIdEnc:"xxx"
+        # deptIdEnc: 'xxx'
+        # deptIdEnc = "xxx"
+        self.token_pattern = re.compile(r"token\s*=\s*['\"]([^'\"]+)['\"]")
+        self.deptIdEnc_pattern = re.compile(r'deptIdEnc["\']?\s*[:=]\s*["\']([^"\']+)["\']')
 
         # 脚本配置
         self.sleep_time = sleep_time
@@ -44,8 +47,7 @@ class reserve:
     def get_target_date(self, action):
         """根据是否在Actions中运行，获取正确的目标预约日期"""
         now = datetime.datetime.now(self.beijing_tz)
-        # 在Actions中，由于时区差异，通常需要预约逻辑上的“明天”
-        delta_days = 1 if action or self.reserve_next_day else 0
+        delta_days = 1 if action else 0
         target_date = now + datetime.timedelta(days=delta_days)
         return target_date.strftime("%Y-%m-%d")
 
@@ -71,6 +73,9 @@ class reserve:
                 logging.warning(f"在座位 {seat_num} 页面未能找到 token。")
             if not deptIdEnc:
                 logging.warning(f"在座位 {seat_num} 页面未能找到 deptIdEnc。")
+                # 增加调试信息，打印部分HTML源码
+                logging.debug(f"HTML snippet for seat {seat_num}: {html[:1000]}")
+
 
             return token, deptIdEnc
 
@@ -114,7 +119,7 @@ class reserve:
             token, deptIdEnc = self._get_page_data(roomid, seat)
             if not token or not deptIdEnc:
                 logging.warning(f"获取座位 {seat} 的页面数据失败，将等待后重试。")
-                time.sleep(self.sleep_time)
+                time.sleep(self.sleep_time * 2) # 获取页面数据失败时，等待时间稍长一些
                 continue
 
             # 准备请求参数
@@ -145,15 +150,13 @@ class reserve:
                     logging.info(f"🎉 🎉 🎉 座位 [{seat}] 预约成功!")
                     return True
                 else:
-                    # 如果是时间未到，则短暂等待后重试
-                    if "未到开放时间" in result.get('msg', ''):
+                    msg = result.get('msg', '')
+                    if "未到开放时间" in msg:
                         time.sleep(self.sleep_time)
-                    # 如果是人数过多，说明接口已开放，可以稍微增加等待
-                    elif "人数过多" in result.get('msg', ''):
+                    elif "人数过多" in msg:
                         time.sleep(self.sleep_time + 0.3)
                     else:
-                        # 其他错误，可能是座位被占，直接放弃此座位
-                        logging.error(f"座位 [{seat}] 预约失败，原因: {result.get('msg', '未知')}")
+                        logging.error(f"座位 [{seat}] 预约失败，原因: {msg}")
                         return False
 
             except requests.RequestException as e:
@@ -161,7 +164,7 @@ class reserve:
             except json.JSONDecodeError:
                 logging.error(f"解析座位 [{seat}] 的预约响应时失败。")
             
-            time.sleep(self.sleep_time) # 每次尝试后都短暂等待
+            time.sleep(self.sleep_time)
 
         logging.error(f"座位 [{seat}] 在 {self.max_attempt} 次尝试后仍未成功。")
         return False
@@ -173,18 +176,14 @@ class reserve:
         
         logging.info(f"开始并发预约，备选座位: {seatid_list}")
         
-        # 使用线程池并发地为每个备选座位提交请求
         with ThreadPoolExecutor(max_workers=len(seatid_list)) as executor:
-            # 提交所有任务
             future_to_seat = {executor.submit(self._submit_single_seat, times, roomid, seat, action): seat for seat in seatid_list}
             
             for future in as_completed(future_to_seat):
                 seat = future_to_seat[future]
                 try:
-                    # 只要有一个任务成功，就立即返回成功
                     if future.result():
                         logging.info(f"在备选座位中成功预约到 [{seat}]，停止其他尝试。")
-                        # 这里可以添加逻辑来取消其他正在运行的future，但对于抢座场景，让它们完成也无妨
                         return True
                 except Exception as e:
                     logging.error(f"处理座位 [{seat}] 的预约任务时发生异常: {e}")
