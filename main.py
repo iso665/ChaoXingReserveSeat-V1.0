@@ -37,7 +37,7 @@ def wait_until(target_time):
 
 # 全局配置
 SLEEPTIME = 0.1  # 减少等待时间
-ENDTIME = "21:31:00"
+ENDTIME = "22:01:00"
 ENABLE_SLIDER = False
 MAX_ATTEMPT = 3  # 减少尝试次数
 RESERVE_TOMORROW = True
@@ -280,7 +280,7 @@ def main(users, action=False):
         logging.info(f"登录完成，共 {len(session_cache)} 个用户登录成功")
         
         # 第二步：等待到预约时间
-        reserve_time = "21:30:00"
+        reserve_time = "22:00:00"
         logging.info(f"等待到预约时间: {reserve_time}")
         wait_until(reserve_time)
         logging.info("开始预约流程")
