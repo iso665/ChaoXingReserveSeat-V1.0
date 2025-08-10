@@ -83,4 +83,3 @@ def generate_behavior_analysis():
     
     # 5. 进行URL编码，这是必须的步骤
     return urllib.parse.quote_plus(behavior_str)
-
