@@ -21,7 +21,7 @@ SLEEPTIME = 0.2         # 每个任务失败后的等待时间（秒）
 LOGIN_TIME = "21:59:30" # 在 Actions 中，开始登录的时间（北京时间）
 RESERVE_TIME = "22:00:00" # 在 Actions 中，开始抢座的时间（北京时间）
 ENDTIME = "22:01:00"    # 在 Actions 中，抢座流程的结束时间
-ENABLE_SLIDER = False   # 您的学校是否有滑块验证码？True 或 False
+ENABLE_SLIDER = TRUE   # 您的学校是否有滑块验证码？True 或 False
 MAX_ATTEMPT = 3         # 每个座位最大尝试次数
 
 # --- 时间处理函数 ---
