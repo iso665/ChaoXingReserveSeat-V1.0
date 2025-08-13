@@ -1,6 +1,8 @@
 name: auto_Reserve
 
 on:
+  schedule:
+    - cron: "0 13 * * *"  # 每天北京时间21:00启动（UTC 13:00）
   workflow_dispatch:
 
 jobs:
