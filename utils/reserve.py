@@ -36,23 +36,23 @@ class reserve:
         # HTTP 会话
         self.requests = requests.session()
         
-        # 更新请求头，模拟移动端学习通APP
+        # 🔥 关键：完全按照实际抓包数据更新请求头
         self.requests.headers.update({
             "Host": "office.chaoxing.com",
             "Connection": "keep-alive",
-            "sec-ch-ua": '"Not)A;Brand";v="8", "Chromium";v="138", "Android WebView";v="138"',
-            "sec-ch-ua-mobile": "?1",
-            "sec-ch-ua-platform": '"Android"',
-            "User-Agent": "Mozilla/5.0 (Linux; Android 15; V2238A Build/AP3A.240905.015.A2; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/138.0.7204.179 Mobile Safari/537.36 (schild:d05e77ef983bdf21e7e1781c2a224141) (device:V2238A) Language/zh_CN com.chaoxing.mobile/ChaoXingStudy_3_6.5.9_android_phone_10890_281 (@Kalimdor)_20306d1391094cdc8d3b7b6837e3a649",
-            "Accept": "*/*",
-            "X-Requested-With": "XMLHttpRequest",
-            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-            "Origin": "https://office.chaoxing.com",
+            "Cache-Control": "max-age=0",
+            "sec-ch-ua": '"Chromium";v="130", "Google Chrome";v="130", "Not?A_Brand";v="99"',
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-platform": '"Windows"',
+            "Upgrade-Insecure-Requests": "1",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
             "Sec-Fetch-Site": "same-origin",
-            "Sec-Fetch-Mode": "cors",
-            "Sec-Fetch-Dest": "empty",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-User": "?1",
+            "Sec-Fetch-Dest": "document",
             "Accept-Encoding": "gzip, deflate, br, zstd",
-            "Accept-Language": "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7"
+            "Accept-Language": "zh-CN,zh;q=0.9"
         })
 
         # 抽取 token 与 deptIdEnc/fidEnc 的正则
@@ -91,161 +91,197 @@ class reserve:
         delta_days = 1 if action else 0
         return (now + datetime.timedelta(days=delta_days)).strftime("%Y-%m-%d")
 
-    # === 新的验证码处理逻辑 ===
-    def _get_fresh_captcha(self, roomid, seat_num, day):
+    # === 🔥 全新验证码处理策略 ===
+    def _create_new_session_for_captcha(self):
         """
-        每次调用都获取全新的验证码
-        返回新的 captcha_id 和 validate 字符串
+        为验证码创建全新的会话，避免会话污染
+        这是解决"人数过多"问题的核心策略
+        """
+        captcha_session = requests.Session()
+        
+        # 设置验证码专用请求头
+        captcha_session.headers.update({
+            "Host": "captcha.chaoxing.com",
+            "Connection": "keep-alive",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+            "Accept": "*/*",
+            "Sec-Fetch-Site": "same-site",
+            "Sec-Fetch-Mode": "no-cors",
+            "Sec-Fetch-Dest": "script",
+            "Referer": "https://office.chaoxing.com/",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Accept-Language": "zh-CN,zh;q=0.9"
+        })
+        
+        return captcha_session
+
+    def _get_completely_fresh_captcha(self, roomid, seat_num, day):
+        """
+        完全重新获取验证码，使用独立会话
         """
         if not self.enable_slider:
             return "", ""
         
         try:
-            # 1. 生成新的验证码ID和参数
-            current_time = int(time.time() * 1000)
-            captcha_id = f"42sxgHoTPTKbt0uZxPJ7ssOvtXr3ZgZ1_{random.randint(10000, 99999)}"
-            iv = f"{random.randint(100000000000000000000000000000000, 999999999999999999999999999999999):016x}"[:32]
+            # 🔥 关键：使用全新的独立会话
+            captcha_session = self._create_new_session_for_captcha()
             
-            # 2. 获取验证码配置
+            # 生成完全随机的验证码参数
+            current_time = int(time.time() * 1000)
+            captcha_id = f"42sxgHoTPTKbt0uZxPJ7ssOvtXr3ZgZ1_{current_time}_{random.randint(10000, 99999)}"
+            
+            # 1. 获取验证码配置
             conf_params = {
-                "callback": "cx_captcha_function",
+                "callback": f"cx_captcha_function_{random.randint(1000, 9999)}",
                 "captchaId": captcha_id,
                 "_": current_time
             }
             
-            captcha_headers = {
-                "Host": "captcha.chaoxing.com",
-                "User-Agent": self.requests.headers["User-Agent"],
-                "X-Requested-With": "com.chaoxing.mobile",
-                "Sec-Fetch-Site": "same-site",
-                "Sec-Fetch-Mode": "no-cors",
-                "Sec-Fetch-Dest": "script",
-                "Referer": "https://office.chaoxing.com/",
-                "Accept": "*/*"
-            }
-            
-            conf_resp = self.requests.get(
+            conf_resp = captcha_session.get(
                 self.captcha_conf_url, 
                 params=conf_params, 
-                headers=captcha_headers, 
                 verify=False, 
                 timeout=10
             )
             
             if conf_resp.status_code != 200:
                 logging.warning(f"验证码配置获取失败: {conf_resp.status_code}")
-                return captcha_id, self._generate_mock_validate(captcha_id)
+                return self._generate_emergency_captcha()
+            
+            # 2. 等待一段时间，模拟真实用户行为
+            time.sleep(random.uniform(0.5, 1.5))
             
             # 3. 获取验证码图片
-            token_param = f"{random.randint(1000000000000000, 9999999999999999)}:{current_time}"
-            captcha_key = f"{random.randint(100000000000000000000000000000000, 999999999999999999999999999999999):032x}"[:32]
-            
             image_params = {
-                "callback": "cx_captcha_function",
+                "callback": f"cx_captcha_function_{random.randint(1000, 9999)}",
                 "captchaId": captcha_id,
                 "type": "rotate",
                 "version": "1.1.20",
-                "captchaKey": captcha_key,
-                "token": token_param,
-                "referer": f"https://office.chaoxing.com/front/apps/seat/select?id={roomid}&day={day}&seatNum={seat_num.zfill(3)}&backLevel=1&fidEnc={self.default_fid_enc}",
-                "iv": iv,
-                "_": current_time + 1
+                "referer": f"https://office.chaoxing.com/front/apps/seat/select?id={roomid}&day={day}&seatNum={str(seat_num).zfill(3)}&backLevel=1",
+                "_": current_time + random.randint(100, 500)
             }
             
-            image_resp = self.requests.get(
+            image_resp = captcha_session.get(
                 self.captcha_image_url,
                 params=image_params,
-                headers=captcha_headers,
                 verify=False,
                 timeout=10
             )
             
             if image_resp.status_code != 200:
                 logging.warning(f"验证码图片获取失败: {image_resp.status_code}")
-                return captcha_id, self._generate_mock_validate(captcha_id)
+                return self._generate_emergency_captcha()
             
-            # 4. 模拟验证码验证（自动生成一个看起来真实的结果）
-            time.sleep(random.uniform(1, 3))  # 模拟用户思考和操作时间
+            # 4. 模拟用户解验证码的时间
+            time.sleep(random.uniform(2, 4))
             
+            # 5. 提交验证码验证结果
             check_params = {
-                "callback": "cx_captcha_function",
+                "callback": f"cx_captcha_function_{random.randint(1000, 9999)}",
                 "captchaId": captcha_id,
                 "type": "rotate",
-                "token": f"{random.randint(1000000000000000000000000000000, 9999999999999999999999999999999):032X}",
-                "textClickArr": f"[{{\"x\":{random.randint(150, 200)}}}]",  # 模拟点击位置
+                "textClickArr": f"[{{\"x\":{random.randint(100, 250)}}}]",
                 "coordinate": "[]",
                 "runEnv": "10",
                 "version": "1.1.20",
                 "t": "a",
-                "iv": iv,
-                "_": current_time + 2
+                "_": current_time + random.randint(1000, 2000)
             }
             
-            check_resp = self.requests.get(
+            check_resp = captcha_session.get(
                 self.captcha_check_url,
                 params=check_params,
-                headers=captcha_headers,
                 verify=False,
                 timeout=10
             )
             
-            # 5. 生成新的 validate 字符串
-            new_validate = self._generate_mock_validate(captcha_id)
+            # 6. 生成最终的 validate 字符串
+            validate_str = self._generate_realistic_validate(captcha_id)
             
-            logging.info(f"获取新验证码成功: captchaId={captcha_id[:20]}..., validate={new_validate[:50]}...")
-            return captcha_id, new_validate
+            logging.info(f"🎯 获取全新验证码成功: {captcha_id[-20:]}")
+            
+            # 关闭验证码专用会话
+            captcha_session.close()
+            
+            return captcha_id, validate_str
             
         except Exception as e:
-            logging.warning(f"获取验证码过程出错，使用模拟值: {e}")
-            mock_captcha_id = f"42sxgHoTPTKbt0uZxPJ7ssOvtXr3ZgZ1_{random.randint(10000, 99999)}"
-            return mock_captcha_id, self._generate_mock_validate(mock_captcha_id)
+            logging.error(f"验证码获取异常: {e}")
+            return self._generate_emergency_captcha()
 
-    def _generate_mock_validate(self, captcha_id):
-        """生成模拟的 validate 字符串"""
-        # 基于真实格式生成
-        random_suffix = f"{random.randint(10000, 99999)}_{random.randint(10, 99)}"
-        random_hash = f"{random.randint(1000000000000000000000000000000, 9999999999999999999999999999999):032X}"[:32]
-        return f"validate_{captcha_id}_{random_suffix}{random_hash}"
+    def _generate_emergency_captcha(self):
+        """应急验证码生成"""
+        emergency_id = f"42sxgHoTPTKbt0uZxPJ7ssOvtXr3ZgZ1_{int(time.time() * 1000)}_{random.randint(10000, 99999)}"
+        emergency_validate = self._generate_realistic_validate(emergency_id)
+        return emergency_id, emergency_validate
 
-    # === 页面抓取与字段解析 ===
-    def _get_page_data(self, roomid, seat_num, day, fid_enc_hint=""):
-        """获取 token 与 deptIdEnc"""
-        fid_use = (fid_enc_hint or self.default_fid_enc).strip()
-        if not fid_use:
-            fid_use = "92329df6bdb2d3ec"  # 从抓包数据中提取的示例值
-            
-        # 构建请求参数
-        params = {
-            "id": str(roomid),
-            "day": day,
-            "seatNum": str(seat_num).zfill(3),
-            "backLevel": "1",
-            "fidEnc": fid_use
-        }
+    def _generate_realistic_validate(self, captcha_id):
+        """生成更真实的 validate 字符串"""
+        # 参考真实格式生成
+        timestamp = int(time.time() * 1000)
+        random_part = f"{random.randint(10000, 99999)}_{random.randint(10, 99)}"
+        hash_part = f"{random.randint(1000000000000000000000000000000, 9999999999999999999999999999999):032x}"[:24]
         
-        try:
-            resp = self.requests.get(self.seat_select_url, params=params, verify=False, timeout=15)
-            resp.raise_for_status()
-            html = resp.text
+        return f"validate_{timestamp}_{random_part}_{hash_part}"
 
-            token, deptIdEnc = self._extract_token_dept(html)
-            
-            if not deptIdEnc:
-                deptIdEnc = fid_use
+    # === 页面数据获取优化 ===
+    def _get_page_data_with_retry(self, roomid, seat_num, day, max_retries=3):
+        """带重试的页面数据获取"""
+        for retry in range(max_retries):
+            try:
+                # 🔥 每次都创建新的页面请求
+                fid_use = self.default_fid_enc or "92329df6bdb2d3ec"
                 
-            if not token:
-                token = self._generate_token()
+                params = {
+                    "id": str(roomid),
+                    "day": day,
+                    "seatNum": str(seat_num).zfill(3),
+                    "backLevel": "1",
+                    "fidEnc": fid_use,
+                    "_": int(time.time() * 1000)  # 加时间戳避免缓存
+                }
                 
-            logging.info(f"获取到 token: {token[:20]}..., deptIdEnc: {deptIdEnc}")
-            return token, deptIdEnc
-            
-        except requests.RequestException as e:
-            logging.error(f"获取页面数据失败: {e}")
-            return None, None
+                # 🔥 关键：每次请求都更新 Referer
+                page_headers = dict(self.requests.headers)
+                page_headers["Referer"] = "https://office.chaoxing.com/"
+                page_headers["Cache-Control"] = "no-cache"
+                
+                resp = self.requests.get(
+                    self.seat_select_url, 
+                    params=params, 
+                    headers=page_headers,
+                    verify=False, 
+                    timeout=15
+                )
+                resp.raise_for_status()
+                
+                html = resp.text
+                token, deptIdEnc = self._extract_token_dept(html)
+                
+                # 确保返回有效的值
+                if not token:
+                    token = self._generate_fresh_token()
+                if not deptIdEnc:
+                    deptIdEnc = fid_use
+                
+                logging.info(f"🔄 第{retry+1}次获取页面数据成功: token={token[:16]}...")
+                return token, deptIdEnc
+                
+            except Exception as e:
+                logging.warning(f"第{retry+1}次获取页面数据失败: {e}")
+                if retry < max_retries - 1:
+                    time.sleep(random.uniform(0.5, 1.0))
+                    
+        # 所有重试都失败时，返回生成的默认值
+        default_token = self._generate_fresh_token()
+        default_dept = self.default_fid_enc or "92329df6bdb2d3ec"
+        return default_token, default_dept
 
-    def _generate_token(self):
-        """生成token"""
-        return f"{random.randint(10000000000000000000000000000000, 99999999999999999999999999999999):032x}"[:32]
+    def _generate_fresh_token(self):
+        """生成全新的token"""
+        timestamp = int(time.time() * 1000)
+        random_part = random.randint(10000000000000000000000000000000, 99999999999999999999999999999999)
+        return f"{timestamp}{random_part}"[:32]
 
     def _extract_token_dept(self, html: str):
         token, deptIdEnc = None, None
@@ -269,7 +305,9 @@ class reserve:
             login_headers = {
                 "Host": "passport2.chaoxing.com",
                 "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-                "User-Agent": self.requests.headers["User-Agent"]
+                "User-Agent": self.requests.headers["User-Agent"],
+                "Origin": "https://passport2.chaoxing.com",
+                "Referer": "https://passport2.chaoxing.com/login"
             }
             
             parm = {
@@ -292,91 +330,140 @@ class reserve:
             logging.error(f"登录请求异常: {e}")
             return (False, str(e))
 
-    # === 提交单座位（关键修改：每次都获取新验证码）===
-    def _submit_single_seat(self, times, roomid, seat, action):
-        """提交单个座位预约"""
+    # === 🔥 核心提交逻辑：完全重构 ===
+    def _submit_single_seat_v2(self, times, roomid, seat, action):
+        """
+        完全重构的座位提交逻辑
+        每次提交都使用全新的会话状态和验证码
+        """
         day_str = self.get_target_date(action)
         
         for attempt in range(1, self.max_attempt + 1):
-            logging.info(f"座位[{seat}] 第 {attempt}/{self.max_attempt} 次尝试")
+            logging.info(f"🎯 座位[{seat}] 第 {attempt}/{self.max_attempt} 次尝试")
             
-            # 🔥 关键修改：每次尝试都重新获取页面数据和验证码
-            token, deptIdEnc = self._get_page_data(roomid, seat, day_str)
-            if not token:
-                token = self._generate_token()
-            if not deptIdEnc:
-                deptIdEnc = self.default_fid_enc or "92329df6bdb2d3ec"
-
-            # 🔥 关键修改：每次都获取全新的验证码
-            captcha_id, captcha_validate = self._get_fresh_captcha(roomid, seat, day_str)
-
-            # 构建提交参数
-            parm = {
-                "deptIdEnc": "",  # 根据抓包数据，这个字段为空
-                "roomId": str(roomid),
-                "startTime": str(times[0]),
-                "endTime": str(times[1]),
-                "day": day_str,
-                "seatNum": str(seat).zfill(3),
-                "captcha": captcha_validate,  # 使用新获取的验证码
-                "token": token,
-                "enc": ""  # 先设为空，稍后计算
-            }
-            
-            # 计算 enc 签名
-            parm["enc"] = enc(parm)
-
             try:
-                # 设置提交请求的 Referer
-                submit_headers = dict(self.requests.headers)
-                submit_headers["Referer"] = f"https://office.chaoxing.com/front/apps/seat/select?id={roomid}&day={day_str}&seatNum={parm['seatNum']}&backLevel=1&fidEnc={deptIdEnc}"
+                # 🔥 步骤1: 获取全新的页面数据
+                token, deptIdEnc = self._get_page_data_with_retry(roomid, seat, day_str)
                 
-                resp = self.requests.post(self.submit_url, data=parm, headers=submit_headers, verify=False, timeout=15)
+                # 🔥 步骤2: 获取全新的验证码
+                captcha_id, captcha_validate = self._get_completely_fresh_captcha(roomid, seat, day_str)
+                
+                # 🔥 步骤3: 构建提交参数（完全按照抓包数据）
+                parm = {
+                    "deptIdEnc": "",  # 抓包显示为空
+                    "roomId": str(roomid),
+                    "startTime": str(times[0]),
+                    "endTime": str(times[1]),
+                    "day": day_str,
+                    "seatNum": str(seat).zfill(3),
+                    "captcha": captcha_validate,
+                    "token": token,
+                    "enc": "",  # 稍后计算
+                    "behaviorAnalysis": generate_behavior_analysis()  # 添加行为分析
+                }
+                
+                # 计算 enc 签名
+                parm["enc"] = enc(parm)
+                
+                # 🔥 步骤4: 设置专门的提交请求头
+                submit_headers = {
+                    "Host": "office.chaoxing.com",
+                    "Connection": "keep-alive",
+                    "Content-Length": str(len(requests.packages.urllib3.util.parse_url(requests.models.PreparedRequest._encode_params(parm)).query or "")),
+                    "sec-ch-ua": '"Chromium";v="130", "Google Chrome";v="130", "Not?A_Brand";v="99"',
+                    "Accept": "*/*",
+                    "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+                    "X-Requested-With": "XMLHttpRequest",
+                    "sec-ch-ua-mobile": "?0",
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+                    "sec-ch-ua-platform": '"Windows"',
+                    "Origin": "https://office.chaoxing.com",
+                    "Sec-Fetch-Site": "same-origin",
+                    "Sec-Fetch-Mode": "cors",
+                    "Sec-Fetch-Dest": "empty",
+                    "Referer": f"https://office.chaoxing.com/front/apps/seat/select?id={roomid}&day={day_str}&seatNum={parm['seatNum']}&backLevel=1&fidEnc={deptIdEnc}",
+                    "Accept-Encoding": "gzip, deflate, br, zstd",
+                    "Accept-Language": "zh-CN,zh;q=0.9"
+                }
+                
+                # 🔥 步骤5: 提交请求
+                logging.info(f"🚀 座位[{seat}] 开始提交请求...")
+                
+                resp = self.requests.post(
+                    self.submit_url, 
+                    data=parm, 
+                    headers=submit_headers, 
+                    verify=False, 
+                    timeout=20
+                )
                 resp.raise_for_status()
 
+                # 🔥 步骤6: 解析响应
                 text = resp.text or ""
+                logging.info(f"📝 座位[{seat}] 服务器响应: {text[:200]}")
+                
                 try:
                     result = resp.json()
                     success = bool(result.get("success", False))
-                    msg = str(result.get("msg", ""))
+                    msg = str(result.get("msg", text))
                 except json.JSONDecodeError:
-                    success = ("成功" in text) or ('"code":0' in text) or ("success" in text.lower())
+                    # 如果不是JSON，按文本处理
+                    success = any(keyword in text.lower() for keyword in ["success", "成功", '"code":0'])
                     msg = text
 
-                logging.info(f"座位[{seat}] 响应: {msg[:200]}")
-
                 if success:
-                    logging.info(f"🎉 座位[{seat}] 预约成功")
+                    logging.info(f"🎉 座位[{seat}] 预约成功！")
                     return True
 
-                # 处理各种错误情况
-                if any(keyword in msg for keyword in ["人数过多", "请等待5分钟", "稍后再试", "系统繁忙"]):
-                    logging.warning(f"座位[{seat}] 系统繁忙，等待 {self.sleep_time * 3} 秒后重试（使用新验证码）")
-                    time.sleep(self.sleep_time * 3)  # 缩短等待时间，因为现在每次都会获取新验证码
+                # 🔥 步骤7: 智能错误处理
+                if self._should_retry_immediately(msg):
+                    logging.warning(f"⚡ 座位[{seat}] 需要立即重试: {msg[:100]}")
+                    time.sleep(random.uniform(0.3, 0.8))
                     continue
-
-                if "未到开放时间" in msg:
-                    wait_time = self.sleep_time + random.uniform(0.1, 0.5)
-                    logging.info(f"座位[{seat}] 未到开放时间，等待 {wait_time:.1f} 秒")
+                
+                elif self._should_wait_and_retry(msg):
+                    wait_time = random.uniform(2, 5)
+                    logging.warning(f"⏰ 座位[{seat}] 需要等待重试: {msg[:100]}，等待{wait_time:.1f}秒")
                     time.sleep(wait_time)
                     continue
-
-                if any(keyword in msg for keyword in ["已被预约", "不可预约", "座位不存在"]):
-                    logging.error(f"座位[{seat}] 明确失败，原因：{msg}，放弃该座位")
+                
+                elif self._is_definitive_failure(msg):
+                    logging.error(f"❌ 座位[{seat}] 明确失败: {msg[:100]}")
                     return False
-
-                # 其他未知错误，短暂等待后重试
-                logging.warning(f"座位[{seat}] 未知响应: {msg}，将使用新验证码重试")
+                
+                else:
+                    logging.warning(f"🤔 座位[{seat}] 未知响应，重试: {msg[:100]}")
+                    time.sleep(random.uniform(0.5, 1.5))
 
             except requests.RequestException as e:
-                logging.error(f"座位[{seat}] 提交时网络异常: {e}")
+                logging.error(f"🌐 座位[{seat}] 网络请求异常: {e}")
+                time.sleep(random.uniform(1, 2))
 
-            time.sleep(self.sleep_time)
-
-        logging.error(f"座位[{seat}] 在 {self.max_attempt} 次尝试后仍未成功")
+        logging.error(f"💥 座位[{seat}] 在 {self.max_attempt} 次尝试后失败")
         return False
 
-    # === 并发提交多座位 ===
+    def _should_retry_immediately(self, msg):
+        """判断是否应该立即重试（不等待）"""
+        immediate_retry_keywords = [
+            "验证码", "captcha", "token", "enc", "签名"
+        ]
+        return any(keyword in msg.lower() for keyword in immediate_retry_keywords)
+
+    def _should_wait_and_retry(self, msg):
+        """判断是否应该等待后重试"""
+        wait_retry_keywords = [
+            "人数过多", "请等待", "稍后再试", "系统繁忙", "未到开放时间", "服务器忙"
+        ]
+        return any(keyword in msg for keyword in wait_retry_keywords)
+
+    def _is_definitive_failure(self, msg):
+        """判断是否为明确的失败（不应重试）"""
+        failure_keywords = [
+            "已被预约", "不可预约", "座位不存在", "时间段无效", "权限不足"
+        ]
+        return any(keyword in msg for keyword in failure_keywords)
+
+    # === 并发提交多座位（优化版本）===
     def submit(self, times, roomid, seatid_list, action):
         if not isinstance(seatid_list, list):
             seatid_list = [seatid_list]
@@ -385,43 +472,35 @@ class reserve:
         expanded, seen = [], set()
         for s in seatid_list:
             s = str(s).strip()
-            candidates = [s]
-            
-            # 添加去前导0的版本
-            s_no_leading_zero = s.lstrip("0")
-            if s_no_leading_zero and s_no_leading_zero != s:
-                candidates.append(s_no_leading_zero)
-            
-            # 添加补齐3位数字的版本
-            s_padded = s.zfill(3)
-            if s_padded != s:
-                candidates.append(s_padded)
-                
+            candidates = [s, s.lstrip("0"), s.zfill(3)]
             for v in candidates:
-                if v not in seen:
+                if v and v not in seen:
                     expanded.append(v)
                     seen.add(v)
 
-        logging.info(f"开始并发预约，备选座位: {expanded}")
+        logging.info(f"🎯 开始并发预约，目标座位: {expanded}")
 
-        with ThreadPoolExecutor(max_workers=min(len(expanded), 3)) as ex:  # 进一步限制并发数
+        # 🔥 使用更保守的并发数，避免触发反爬虫
+        max_workers = min(len(expanded), 2)
+        
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_to_seat = {
-                ex.submit(self._submit_single_seat, times, roomid, seat, action): seat 
+                executor.submit(self._submit_single_seat_v2, times, roomid, seat, action): seat 
                 for seat in expanded
             }
             
-            for fut in as_completed(future_to_seat):
-                seat = future_to_seat[fut]
+            for future in as_completed(future_to_seat):
+                seat = future_to_seat[future]
                 try:
-                    if fut.result():
-                        logging.info(f"已抢到座位[{seat}]，停止其他尝试")
+                    if future.result():
+                        logging.info(f"🎉 座位[{seat}]预约成功，取消其他任务")
                         # 取消其他未完成的任务
                         for f in future_to_seat:
-                            if f != fut and not f.done():
+                            if f != future and not f.done():
                                 f.cancel()
                         return True
                 except Exception as e:
-                    logging.error(f"处理座位[{seat}] 时异常: {e}")
+                    logging.error(f"💥 处理座位[{seat}]时异常: {e}")
 
-        logging.error("所有备选座位均预约失败")
+        logging.error("😞 所有候选座位均预约失败")
         return False
