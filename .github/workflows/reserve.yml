@@ -1,47 +1,32 @@
-name: auto_Reserve
+name: 超星座位自动预约
 
 on:
-    schedule:
-      - cron: "59 13 * * *"  # 每天北京时间21:59启动
-    workflow_dispatch:
+  schedule:
+    - cron: '55 13 * * *'  # 北京时间21:55执行
+  workflow_dispatch:
 
 jobs:
-  build:
+  reserve:
     runs-on: ubuntu-latest
+    
     steps:
-      # 步骤 1: 检出代码 (已升级到 v4)
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      # 步骤 2: 设置 Python 环境 (已升级到 v5)
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: 3.11
-
-      # 步骤 3: 安装所有必要的依赖
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          # 确保安装了所有可能用到的库
-          pip install cryptography requests pytz numpy opencv-python
-
-      # 步骤 4: 运行主脚本
-      - name: Run script
-        id: run_script # 给这一步一个ID，方便后面判断它是否失败
-        env:
-          USERNAMES: ${{ secrets.USERNAMES }}
-          PASSWORDS: ${{ secrets.PASSWORDS }}
-        run: |
-          python main.py -m reserve --action
-
-      # 步骤 5: 上传调试文件 (核心修复：已升级到 v4)
-      # 这个步骤会在上一步（Run script）失败时运行
-      - name: Upload debug artifact if script fails
-        # 【核心修复】将 uses 的版本从 v3 更新到 v4
-        uses: actions/upload-artifact@v4
-        if: steps.run_script.outcome == 'failure' # 更可靠的失败判断
-        with:
-          name: page_source_for_debug
-          path: page_source_for_debug.html
-          retention-days: 5 # 将文件保留5天
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install requests pytz cryptography
+        
+    - name: Run reservation
+      env:
+        # 🔥 关键：设置环境变量
+        FID_ENC: ${{ secrets.FID_ENC }}
+        USERNAMES: ${{ secrets.USERNAMES }}
+        PASSWORDS: ${{ secrets.PASSWORDS }}
+      run: |
+        python main.py -m reserve --action
