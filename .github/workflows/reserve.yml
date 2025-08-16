@@ -1,4 +1,4 @@
-name: 超星座位自动预约
+name: reserve
 
 on:
   schedule:
