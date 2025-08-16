@@ -15,14 +15,14 @@ logging.basicConfig(
 # --- 从 utils 导入必要的模块 ---
 from utils import reserve, get_user_credentials
 
-# --- 全局配置 ---
-# 您可以在这里调整脚本的核心参数
-SLEEPTIME = 1.0         # 每个任务失败后的等待时间（秒）- 增加间隔
-LOGIN_TIME = "21:59:00" # 在 Actions 中，开始登录的时间（北京时间）
-RESERVE_TIME = "22:00:00" # 在 Actions 中，开始抢座的时间（北京时间）
-ENDTIME = "22:01:00"    # 在 Actions 中，抢座流程的结束时间
-ENABLE_SLIDER = True    # 您的学校是否有滑块验证码？True 或 False - 启用验证码处理
-MAX_ATTEMPT = 5         # 每个座位最大尝试次数 - 增加尝试次数
+# --- 🔥 全局配置优化 ---
+# 专门针对"人数过多"问题的参数调整
+SLEEPTIME = 0.8         # 减少等待时间，但保持足够间隔避免被限制
+LOGIN_TIME = "21:58:30" # 提前30秒登录，确保会话稳定
+RESERVE_TIME = "22:00:00" # 准点开始抢座
+ENDTIME = "22:02:00"    # 延长抢座时间窗口
+ENABLE_SLIDER = True    # 🔥 必须启用滑块验证码处理
+MAX_ATTEMPT = 8         # 🔥 大幅增加尝试次数，因为现在每次都用新验证码
 
 # --- 时间处理函数 ---
 def get_current_time():
@@ -37,48 +37,51 @@ def wait_until(target_time_str):
     """等待直到指定的北京时间"""
     logging.info(f"等待直到北京时间 {target_time_str}...")
     while get_current_time() < target_time_str:
-        time.sleep(0.5)
+        time.sleep(0.1)  # 缩短检查间隔，更精确
     logging.info(f"已到达指定时间 {target_time_str}，继续执行。")
 
 # --- 核心逻辑函数 ---
 
 def login_user(username, password):
     """登录单个用户并返回一个包含会话的 reserve 实例"""
-    logging.info(f"----------- 正在登录用户 {username} -----------")
+    logging.info(f"----------- 🔐 正在登录用户 {username} -----------")
     try:
         s = reserve(
             sleep_time=SLEEPTIME,
             max_attempt=MAX_ATTEMPT,
-            enable_slider=ENABLE_SLIDER,  # 启用验证码处理
+            enable_slider=ENABLE_SLIDER,  # 🔥 关键：启用验证码处理
             reserve_next_day=True  # 在Actions中总是预约第二天
         )
         login_result = s.login(username, password)
         if not login_result[0]:
-            logging.error(f"用户 {username} 登录失败: {login_result[1]}")
+            logging.error(f"❌ 用户 {username} 登录失败: {login_result[1]}")
             return None
-        logging.info(f"用户 {username} 登录成功。")
+        logging.info(f"✅ 用户 {username} 登录成功。")
         return s
     except Exception as e:
-        logging.error(f"用户 {username} 登录过程中发生异常: {str(e)}")
+        logging.error(f"💥 用户 {username} 登录过程中发生异常: {str(e)}")
         return None
 
 def login_all_users(users, usernames_env, passwords_env, action):
     """并发登录所有用户并缓存会话实例"""
     session_cache = {}
     if not action:
-        logging.info("本地模式，将使用 config.json 中的账号密码。")
+        logging.info("🏠 本地模式，将使用 config.json 中的账号密码。")
         usernames_list = [u['username'] for u in users]
         passwords_list = [u['password'] for u in users]
     else:
-        logging.info("Actions 模式，将使用 Secrets 中的账号密码。")
+        logging.info("⚡ Actions 模式，将使用 Secrets 中的账号密码。")
         usernames_list = usernames_env.split(',')
         passwords_list = passwords_env.split(',')
 
     if len(usernames_list) != len(users) or len(passwords_list) != len(users):
-        logging.error("账号/密码数量与配置文件中的用户数不匹配！")
+        logging.error("❌ 账号/密码数量与配置文件中的用户数不匹配！")
         return {}
 
-    with ThreadPoolExecutor(max_workers=len(users)) as executor:
+    # 🔥 优化：减少并发数，避免触发限制
+    max_login_workers = min(len(users), 3)  # 最多3个并发登录
+    
+    with ThreadPoolExecutor(max_workers=max_login_workers) as executor:
         future_to_user = {
             executor.submit(login_user, u, p): users[i]["username"]
             for i, (u, p) in enumerate(zip(usernames_list, passwords_list))
@@ -88,8 +91,10 @@ def login_all_users(users, usernames_env, passwords_env, action):
             session = future.result()
             if session:
                 session_cache[config_username] = session
+                # 登录成功后短暂等待，避免会话冲突
+                time.sleep(0.5)
     
-    logging.info(f"登录流程结束，共 {len(session_cache)} 个用户成功登录。")
+    logging.info(f"🎯 登录流程结束，共 {len(session_cache)} 个用户成功登录。")
     return session_cache
 
 def process_user_tasks(session, user_config, action):
@@ -101,26 +106,33 @@ def process_user_tasks(session, user_config, action):
     ]
     
     if not tasks_to_run:
-        logging.info(f"用户 {username}: 今天没有需要执行的预约任务。")
+        logging.info(f"📅 用户 {username}: 今天没有需要执行的预约任务。")
         return True # 视为成功
 
-    logging.info(f"用户 {username}: 今天有 {len(tasks_to_run)} 个任务需要执行。")
+    logging.info(f"📋 用户 {username}: 今天有 {len(tasks_to_run)} 个任务需要执行。")
     
     all_tasks_successful = True
-    for task in tasks_to_run:
+    for i, task in enumerate(tasks_to_run):
         times = task['time']
         roomid = task['roomid']
         seatid = task['seatid']
         
-        logging.info(f"--- 开始为用户 {username} 执行任务: 时间 {times}, 房间 {roomid}, 座位 {seatid} ---")
+        logging.info(f"--- 🚀 开始为用户 {username} 执行第{i+1}个任务: 时间 {times}, 房间 {roomid}, 座位 {seatid} ---")
+        
+        # 🔥 关键优化：每个任务之间增加随机间隔
+        if i > 0:
+            wait_time = random.uniform(1, 3)
+            logging.info(f"⏰ 任务间隔等待 {wait_time:.1f} 秒...")
+            time.sleep(wait_time)
+        
         success = session.submit(times, roomid, seatid, action)
         if not success:
             all_tasks_successful = False
-            logging.error(f"--- 用户 {username} 的任务: 时间 {times} 失败！ ---")
+            logging.error(f"❌ 用户 {username} 的第{i+1}个任务失败！")
         else:
-            logging.info(f"--- 用户 {username} 的任务: 时间 {times} 成功！ ---")
-            # 如果一个任务成功，可以认为该用户今天的任务已完成，避免重复预约
-            return True 
+            logging.info(f"✅ 用户 {username} 的第{i+1}个任务成功！")
+            # 🔥 优化：如果一个任务成功，继续尝试其他任务（而不是立即返回）
+            # 这样可以帮助用户预约多个时段的座位
             
     return all_tasks_successful
 
@@ -128,7 +140,7 @@ def process_user_tasks(session, user_config, action):
 
 def main(users, action=False):
     """主执行函数"""
-    logging.info("程序启动...")
+    logging.info("🎬 程序启动...")
     
     if action:
         wait_until(LOGIN_TIME)
@@ -137,15 +149,18 @@ def main(users, action=False):
     session_cache = login_all_users(users, usernames_env, passwords_env, action)
 
     if not session_cache:
-        logging.critical("没有任何用户登录成功，程序终止。")
+        logging.critical("💀 没有任何用户登录成功，程序终止。")
         return
 
     if action:
         wait_until(RESERVE_TIME)
 
-    logging.info("========== 开始执行预约任务 ==========")
+    logging.info("========== 🎯 开始执行预约任务 ==========")
     
-    with ThreadPoolExecutor(max_workers=len(users)) as executor:
+    # 🔥 优化：进一步减少并发数，每次最多2个用户同时执行任务
+    max_task_workers = min(len(users), 2)
+    
+    with ThreadPoolExecutor(max_workers=max_task_workers) as executor:
         future_to_user = {
             executor.submit(process_user_tasks, session, users[i], action): user['username']
             for i, user in enumerate(users) if (session := session_cache.get(user['username']))
@@ -156,20 +171,20 @@ def main(users, action=False):
             try:
                 result = future.result()
                 if result:
-                    logging.info(f"用户 {username} 的所有任务处理完毕，结果: 成功。")
+                    logging.info(f"🎉 用户 {username} 的所有任务处理完毕，结果: 成功。")
                 else:
-                    logging.error(f"用户 {username} 的部分或全部任务处理失败。")
+                    logging.warning(f"⚠️ 用户 {username} 的部分或全部任务处理失败。")
             except Exception as e:
-                logging.error(f"处理用户 {username} 的任务时发生严重异常: {e}")
+                logging.error(f"💥 处理用户 {username} 的任务时发生严重异常: {e}")
 
-    logging.info("========== 所有预约任务处理完毕 ==========")
+    logging.info("========== 🏁 所有预约任务处理完毕 ==========")
 
 
 def debug(users, action=False):
     """调试函数"""
-    logging.info("--- 调试模式启动 ---")
+    logging.info("--- 🔧 调试模式启动 ---")
     main(users, action)
-    logging.info("--- 调试模式结束 ---")
+    logging.info("--- 🔧 调试模式结束 ---")
 
 if __name__ == "__main__":
     config_path = os.path.join(os.path.dirname(__file__), 'config.json')
@@ -182,10 +197,18 @@ if __name__ == "__main__":
     try:
         with open(args.user, "r", encoding="utf-8") as data:
             usersdata = json.load(data)["reserve"]
-        logging.info(f"成功加载 {len(usersdata)} 个用户配置。")
+        logging.info(f"📚 成功加载 {len(usersdata)} 个用户配置。")
     except Exception as e:
-        logging.error(f"配置文件加载失败: {e}")
+        logging.error(f"💥 配置文件加载失败: {e}")
         exit(1)
+    
+    # 🔥 添加环境检查
+    if args.action and ENABLE_SLIDER:
+        fid_enc = os.getenv("FID_ENC", "").strip()
+        if not fid_enc:
+            logging.warning("⚠️ 未设置 FID_ENC 环境变量，将使用默认值")
+        else:
+            logging.info(f"✅ FID_ENC 环境变量已设置: {fid_enc[:10]}...")
     
     if args.method == "reserve":
         main(usersdata, args.action)
